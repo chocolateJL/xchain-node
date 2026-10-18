@@ -118,4 +118,9 @@ enum {
 
     // Upgrade 12
     SCRIPT_ENABLE_MAY2026 = (1U << 28),
+
+    // XCHAIN post-quantum rules (spec/pq-signature.md): enables OP_CHECKPQSIG(VERIFY)
+    // and disables all secp256k1 signature opcodes. Active from genesis on XCHAIN
+    // networks; kept as a flag so the upstream test suite still runs without it.
+    SCRIPT_ENABLE_PQSIG = (1U << 29),
 };

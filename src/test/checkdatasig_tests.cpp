@@ -148,7 +148,8 @@ BOOST_AUTO_TEST_CASE(checkdatasig_test) {
 
     MMIXLinearCongruentialGenerator lcg;
     for (int i = 0; i < 4096; i++) {
-        uint32_t flags = lcg.next();
+        // XCHAIN: these random flags test the secp256k1 opcodes, so never set the PQ rules bit.
+        uint32_t flags = lcg.next() & ~SCRIPT_ENABLE_PQSIG;
 
         if (flags & SCRIPT_VERIFY_STRICTENC) {
             // When strict encoding is enforced, hybrid keys are invalid.

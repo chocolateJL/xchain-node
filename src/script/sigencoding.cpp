@@ -7,6 +7,7 @@
 #include <script/sigencoding.h>
 
 #include <pubkey.h>
+#include <script/pqsig.h>
 #include <script/script_flags.h>
 
 /**
@@ -290,6 +291,22 @@ static bool IsCompressedOrUncompressedPubKey(const ByteView &vchPubKey) {
 bool CheckPubKeyEncoding(const ByteView &vchPubKey, uint32_t flags, ScriptError *serror) {
     if ((flags & SCRIPT_VERIFY_STRICTENC) && !IsCompressedOrUncompressedPubKey(vchPubKey)) {
         return set_error(serror, ScriptError::PUBKEYTYPE);
+    }
+    return true;
+}
+
+bool CheckPQSignatureEncoding(const ByteView &vchSig, uint32_t flags, ScriptError *serror) {
+    if (vchSig.size() != pqsig::SIG_SIZE) {
+        return set_error(serror, ScriptError::PQ_SIG_ENCODING);
+    }
+    // Sighash type rules are consensus for PQ signatures, and they always use the
+    // FORKID digest, so force both flags.
+    return CheckSighashEncoding(vchSig, flags | SCRIPT_VERIFY_STRICTENC | SCRIPT_ENABLE_SIGHASH_FORKID, serror);
+}
+
+bool CheckPQPubKeyEncoding(const ByteView &vchPubKey, ScriptError *serror) {
+    if (!pqsig::IsValidPubKeyEncoding(vchPubKey)) {
+        return set_error(serror, ScriptError::PQ_PUBKEY_ENCODING);
     }
     return true;
 }

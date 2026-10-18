@@ -1025,6 +1025,11 @@ void SetupServerArgs() {
                   regtestChainParams->GetConsensus().upgrade12Height),
         true, OptionsCategory::DEBUG_TEST);
     gArgs.AddArg(
+        "-pqsigheight=<n>",
+        "XCHAIN (regtest only): height after which the post-quantum rules apply (OP_CHECKPQSIG on, secp256k1 "
+        "signature opcodes off); 0 enforces them from block 1 (default: off on the inherited BCH networks)",
+        true, OptionsCategory::DEBUG_TEST);
+    gArgs.AddArg(
         "-upgrade2027activationtime=<n>",
         strprintf("Activation time of the tentative May 2027 Bitcoin Cash Network Upgrade (<n> seconds since epoch, "
                   "default: %d, chipnet: %d)",
@@ -2062,6 +2067,19 @@ bool AppInitParameterInteraction(Config &config) {
         }
         ::g_Upgrade12HeightOverride.emplace(static_cast<int32_t>(height));
         LogPrintf("Using upgrade 12 activation height override: %d\n", height);
+    }
+
+    // XCHAIN: regtest override for the post-quantum activation height
+    if (gArgs.IsArgSet("-pqsigheight")) {
+        if (Params().NetworkIDString() != CBaseChainParams::REGTEST) {
+            return InitError("-pqsigheight is only allowed on regtest");
+        }
+        const auto height = gArgs.GetArg("-pqsigheight", 0);
+        if (height < 0 || height > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+            return InitError("Invalid -pqsigheight, must be a positive integer in the 32-bit range");
+        }
+        ::g_PQSigHeightOverride.emplace(static_cast<int32_t>(height));
+        LogPrintf("Using post-quantum rules activation height override: %d\n", height);
     }
 
     return true;

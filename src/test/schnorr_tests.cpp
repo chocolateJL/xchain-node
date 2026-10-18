@@ -111,7 +111,8 @@ BOOST_AUTO_TEST_CASE(opcodes_random_flags) {
     // The first lcg.next() call is still 0x00000000 though.
     MMIXLinearCongruentialGenerator lcg(1234);
     for (int i = 0; i < 4096; i++) {
-        uint32_t flags = lcg.next();
+        // XCHAIN: these random flags test the secp256k1 opcodes, so never set the PQ rules bit.
+        uint32_t flags = lcg.next() & ~SCRIPT_ENABLE_PQSIG;
 
         const bool hasFork = (flags & SCRIPT_ENABLE_SIGHASH_FORKID) != 0;
         const bool hasNullFail = (flags & SCRIPT_VERIFY_NULLFAIL) != 0;

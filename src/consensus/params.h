@@ -15,6 +15,10 @@
 
 namespace Consensus {
 
+/** pqSigHeight value for networks that do not enforce the post-quantum rules. */
+inline constexpr int PQSIG_DISABLED_HEIGHT = std::numeric_limits<int>::max();
+
+
 /**
  * Parameters that influence chain consensus.
  */
@@ -59,6 +63,11 @@ struct Params {
     int upgrade12Height;
     /** (Tentative) Unix time used for MTP activation of 15 May 2027 12:00:00 UTC upgrade */
     int64_t upgrade2027ActivationTime;
+    /**
+     * XCHAIN: block height at which the post-quantum rules (SCRIPT_ENABLE_PQSIG) became active, one less than the
+     * first block that enforces them, like the upgrade heights above. PQSIG_DISABLED_HEIGHT means never.
+     */
+    int pqSigHeight;
 
     /** Default blocksize limit for this chain. After activation of upgrade 10, this is the max block size floor, since
      *  the ABLA algorithm allows for growing the limit based on demand. */

@@ -180,9 +180,11 @@ enum opcodetype {
     // additional byte string operations
     OP_REVERSEBYTES = 0xbc,
 
-    // Available codepoints
-    // 0xbd,
-    // 0xbe,
+    // Post-quantum signatures (XCHAIN, spec/pq-signature.md)
+    OP_CHECKPQSIG = 0xbd,
+    OP_CHECKPQSIGVERIFY = 0xbe,
+
+    // Available codepoints (reserved)
     // 0xbf,
 
     // Native Introspection opcodes

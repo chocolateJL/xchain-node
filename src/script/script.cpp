@@ -237,6 +237,12 @@ const char *GetOpName(opcodetype opcode) {
         case OP_REVERSEBYTES:
             return "OP_REVERSEBYTES";
 
+        // Post-quantum signatures
+        case OP_CHECKPQSIG:
+            return "OP_CHECKPQSIG";
+        case OP_CHECKPQSIGVERIFY:
+            return "OP_CHECKPQSIGVERIFY";
+
         // expansion
         case OP_NOP1:
             return "OP_NOP1";

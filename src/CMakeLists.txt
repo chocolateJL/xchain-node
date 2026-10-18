@@ -519,6 +519,7 @@ add_library(script
   script/descriptor.cpp
   script/interpreter.cpp
   script/ismine.cpp
+  script/pqsig.cpp
   script/script.cpp
   script/script_error.cpp
   script/script_execution_context.cpp

@@ -67,6 +67,12 @@ public:
         return false;
     }
 
+    /** ML-DSA-44 check for OP_CHECKPQSIG. Encodings are already validated by the caller. */
+    virtual bool CheckPQSig(const ByteView &vchSigIn, const ByteView &vchPubKey,
+                            const ByteView &scriptCode, uint32_t flags, size_t *pnBytesHashed) const {
+        return false;
+    }
+
     virtual bool CheckLockTime(const CScriptNum &nLockTime) const {
         return false;
     }
@@ -105,6 +111,8 @@ public:
     // The overridden functions are now final.
     bool CheckSig(const ByteView &vchSigIn, const std::vector<uint8_t> &vchPubKey,
                   const ByteView &scriptCode, uint32_t flags, size_t *pnBytesHashed) const final override;
+    bool CheckPQSig(const ByteView &vchSigIn, const ByteView &vchPubKey,
+                    const ByteView &scriptCode, uint32_t flags, size_t *pnBytesHashed) const final override;
     bool CheckLockTime(const CScriptNum &nLockTime) const final override;
     bool CheckSequence(const CScriptNum &nSequence) const final override;
     const ScriptExecutionContext *GetContext() const final override { return &context; }

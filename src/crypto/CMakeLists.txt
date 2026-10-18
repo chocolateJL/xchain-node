@@ -37,6 +37,20 @@ endif()
 # Dependencies
 target_link_libraries(crypto OpenSSL::Crypto)
 
+# ML-DSA-44 from vendored mldsa-native (see mldsa/VENDORED.md).
+# Portable C only: no native backend and no assembly, so every platform runs
+# the same verification code (decision D12 pending).
+# Consumers must provide `int randombytes(uint8_t *, size_t)` (see pqsig.cpp).
+add_library(mldsa44 mldsa/mldsa_native.c)
+target_include_directories(mldsa44 PUBLIC mldsa)
+target_compile_definitions(mldsa44
+	PUBLIC
+		MLD_CONFIG_PARAMETER_SET=44
+		MLD_CONFIG_NAMESPACE_PREFIX=xc_mldsa44
+)
+set_target_properties(mldsa44 PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
+target_link_libraries(crypto mldsa44)
+
 # Crypto libraries requiring hardware features
 macro(add_crypto_library NAME)
 	add_library(${NAME} ${ARGN})
@@ -103,4 +117,24 @@ if(ENABLE_SHANI)
 	add_crypto_library(crypto_shani sha256_shani.cpp)
 	target_compile_definitions(crypto_shani PUBLIC ENABLE_SHANI)
 	target_compile_options(crypto_shani PRIVATE ${CRYPTO_SHANI_FLAGS})
+endif()
+
+# Shared ML-DSA-44 library for the Python functional tests (test_framework/pqsig.py).
+# Same source and configuration as mldsa44 above, plus a getrandom()-based RNG.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	add_library(mldsa44_testshared SHARED mldsa/mldsa_native.c mldsa_test_rng.c)
+	target_include_directories(mldsa44_testshared PRIVATE mldsa)
+	target_compile_definitions(mldsa44_testshared
+		PRIVATE
+			_GNU_SOURCE
+			MLD_CONFIG_PARAMETER_SET=44
+			MLD_CONFIG_NAMESPACE_PREFIX=xc_mldsa44
+	)
+	set_target_properties(mldsa44_testshared PROPERTIES
+		C_STANDARD 99
+		C_STANDARD_REQUIRED ON
+		OUTPUT_NAME xc_mldsa44
+		# Python loads it with ctypes, so the API must be exported (the project default is hidden).
+		C_VISIBILITY_PRESET default
+	)
 endif()

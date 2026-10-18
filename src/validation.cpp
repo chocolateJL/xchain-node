@@ -1580,6 +1580,11 @@ static uint32_t GetNextBlockScriptFlags(const Consensus::Params &params, const C
         flags |= SCRIPT_ENABLE_MAY2026;
     }
 
+    // XCHAIN: ML-DSA-44 signatures (OP_CHECKPQSIG) on, secp256k1 signature opcodes off.
+    if (IsPQSigEnabled(params, pindex)) {
+        flags |= SCRIPT_ENABLE_PQSIG;
+    }
+
     return flags;
 }
 

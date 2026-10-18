@@ -150,6 +150,8 @@ public:
 
         // May 15, 2026 12:00:00 UTC protocol upgrade (this is one less than the first block mined under new rules)
         consensus.upgrade12Height = 951144; /* first block with pindex->GetMedianTimePast() >= 1778846400 */
+        // XCHAIN post-quantum rules: off on the inherited BCH networks (regtest: see -pqsigheight).
+        consensus.pqSigHeight = Consensus::PQSIG_DISABLED_HEIGHT;
 
         // May 15, 2027 12:00:00 UTC tentative protocol upgrade
         consensus.upgrade2027ActivationTime = 1810382400;
@@ -409,6 +411,8 @@ public:
 
         // May 15, 2026 12:00:00 UTC protocol upgrade (this is one less than the first block mined under new rules)
         consensus.upgrade12Height = 1710482; /* first block with pindex->GetMedianTimePast() >= 1778846400 */
+        // XCHAIN post-quantum rules: off on the inherited BCH networks (regtest: see -pqsigheight).
+        consensus.pqSigHeight = Consensus::PQSIG_DISABLED_HEIGHT;
 
         // May 15, 2027 12:00:00 UTC tentative protocol upgrade
         consensus.upgrade2027ActivationTime = 1810382400;
@@ -634,6 +638,8 @@ public:
 
         // May 15, 2026 12:00:00 UTC protocol upgrade (this is one less than the first block mined under new rules)
         consensus.upgrade12Height = 305847; /* first block with pindex->GetMedianTimePast() >= 1778846400 */
+        // XCHAIN post-quantum rules: off on the inherited BCH networks (regtest: see -pqsigheight).
+        consensus.pqSigHeight = Consensus::PQSIG_DISABLED_HEIGHT;
 
         // May 15, 2027 12:00:00 UTC tentative protocol upgrade
         consensus.upgrade2027ActivationTime = 1810382400;
@@ -829,6 +835,8 @@ public:
 
         // May 15, 2026 12:00:00 UTC protocol upgrade
         consensus.upgrade12Height = 10'006;
+        // XCHAIN post-quantum rules: off on the inherited BCH networks (regtest: see -pqsigheight).
+        consensus.pqSigHeight = Consensus::PQSIG_DISABLED_HEIGHT;
 
         // May 15, 2027 12:00:00 UTC tentative protocol upgrade
         consensus.upgrade2027ActivationTime = 1810382400;
@@ -992,6 +1000,8 @@ public:
         // November 15, 2025 12:00:00 UTC; protocol upgrade activates 6 months early
         // This is the first block with pindex->GetMedianTimePast() >= 1763208000, which is one less than upgrade block.
         consensus.upgrade12Height = 279791;
+        // XCHAIN post-quantum rules: off on the inherited BCH networks (regtest: see -pqsigheight).
+        consensus.pqSigHeight = Consensus::PQSIG_DISABLED_HEIGHT;
 
         // November 15, 2026 12:00:00 UTC; tentative protocol upgrade activates 6 months early
         consensus.upgrade2027ActivationTime = 1794744000;
@@ -1173,6 +1183,8 @@ public:
 
         // May 15, 2026 12:00:00 UTC protocol upgrade
         consensus.upgrade12Height = 0;
+        // XCHAIN post-quantum rules: off on the inherited BCH networks (regtest: see -pqsigheight).
+        consensus.pqSigHeight = Consensus::PQSIG_DISABLED_HEIGHT;
 
         // May 15, 2027 12:00:00 UTC tentative protocol upgrade
         consensus.upgrade2027ActivationTime = 1810382400;

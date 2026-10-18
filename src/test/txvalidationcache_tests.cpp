@@ -155,7 +155,8 @@ ValidateCheckInputsForAllFlags(const CTransaction &tx, uint32_t failing_flags,
 
     MMIXLinearCongruentialGenerator lcg;
     for (int i = 0; i < 4096; i++) {
-        uint32_t test_flags = lcg.next() | required_flags;
+        // XCHAIN: these transactions use secp256k1 signatures, so never set the PQ rules bit.
+        uint32_t test_flags = (lcg.next() & ~SCRIPT_ENABLE_PQSIG) | required_flags;
         CValidationState state;
 
         // Filter out incompatible flag choices

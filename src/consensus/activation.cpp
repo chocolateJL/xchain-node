@@ -179,3 +179,17 @@ bool IsUpgrade2027Enabled(const Consensus::Params &params, const CBlockIndex *pi
 
     return IsUpgrade2027Enabled(params, pindexPrev->GetMedianTimePast());
 }
+
+// XCHAIN post-quantum rules
+std::optional<int32_t> g_PQSigHeightOverride;
+
+int32_t GetPQSigActivationHeight(const Consensus::Params &params) {
+    return g_PQSigHeightOverride.value_or(params.pqSigHeight);
+}
+
+bool IsPQSigEnabled(const Consensus::Params &params, const CBlockIndex *pindexPrev) {
+    if (pindexPrev == nullptr) {
+        return false;
+    }
+    return pindexPrev->nHeight >= GetPQSigActivationHeight(params);
+}

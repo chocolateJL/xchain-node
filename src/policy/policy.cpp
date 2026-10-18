@@ -40,9 +40,38 @@ bool IsDust(const CTxOut &txout, const CFeeRate &dustRelayFeeIn) {
     return (txout.nValue < GetDustThreshold(txout, dustRelayFeeIn));
 }
 
+/** True if the script contains a secp256k1 signature opcode (disabled under the XCHAIN PQ rules). */
+static bool ContainsSecp256k1SigOp(const CScript &script) {
+    CScript::const_iterator pc = script.begin();
+    opcodetype opcode;
+    while (pc < script.end()) {
+        if (!script.GetOp(pc, opcode)) {
+            return false;
+        }
+        switch (opcode) {
+            case OP_CHECKSIG:
+            case OP_CHECKSIGVERIFY:
+            case OP_CHECKMULTISIG:
+            case OP_CHECKMULTISIGVERIFY:
+            case OP_CHECKDATASIG:
+            case OP_CHECKDATASIGVERIFY:
+                return true;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
 bool IsStandard(const CScript &scriptPubKey, txnouttype &whichType, uint32_t flags) {
     std::vector<std::vector<uint8_t>> vSolutions;
     whichType = Solver(scriptPubKey, vSolutions, flags);
+
+    // Under the PQ rules such outputs can never be spent (spec/pq-signature.md section 3), so don't relay them.
+    if ((flags & SCRIPT_ENABLE_PQSIG) && whichType != TX_NULL_DATA && ContainsSecp256k1SigOp(scriptPubKey)) {
+        whichType = TX_NONSTANDARD;
+        return false;
+    }
 
     if (whichType == TX_NONSTANDARD) {
         return false;

@@ -12,6 +12,7 @@
 #include <primitives/transaction.h>
 #include <pubkey.h>
 #include <script/bitfield.h>
+#include <script/pqsig.h>
 #include <script/script.h>
 #include <script/script_flags.h>
 #include <script/sigencoding.h>
@@ -158,6 +159,15 @@ static bool IsOpcodeDisabled(opcodetype opcode, uint32_t flags) {
         case OP_RSHIFTBIN:
             // Disabled before May 2026
             return (flags & SCRIPT_ENABLE_MAY2026) == 0;
+        case OP_CHECKSIG:
+        case OP_CHECKSIGVERIFY:
+        case OP_CHECKMULTISIG:
+        case OP_CHECKMULTISIGVERIFY:
+        case OP_CHECKDATASIG:
+        case OP_CHECKDATASIGVERIFY:
+            // secp256k1 signatures are not quantum safe; disabled under the PQ rules,
+            // even in unexecuted branches (spec/pq-signature.md section 3).
+            return (flags & SCRIPT_ENABLE_PQSIG) != 0;
         default:
             break;
     }
@@ -1469,6 +1479,58 @@ bool EvalScriptImpl(StackT &stack, const CScript &initialScript, uint32_t flags,
                             }
                         } break;
 
+                        case OP_CHECKPQSIG:
+                        case OP_CHECKPQSIGVERIFY: {
+                            // (sig pubkey -- bool), see spec/pq-signature.md section 2
+                            if (!(flags & SCRIPT_ENABLE_PQSIG)) {
+                                // Unassigned codepoint without the PQ rules, as in upstream BCHN.
+                                return set_error(serror, ScriptError::BAD_OPCODE);
+                            }
+                            if (stack.size() < 2) {
+                                return set_error(serror, ScriptError::INVALID_STACK_OPERATION);
+                            }
+                            StackVec const &vchSig = stacktop(-2).vec();
+                            StackVec const &vchPubKey = stacktop(-1).vec();
+
+                            // The public key is checked even when the signature is empty.
+                            if (!CheckPQPubKeyEncoding(vchPubKey, serror)) {
+                                return false;
+                            }
+
+                            bool fSuccess = false;
+                            if (vchSig.size()) {
+                                if (!CheckPQSignatureEncoding(vchSig, flags, serror)) {
+                                    return false;
+                                }
+                                // Subset of script starting at the most recent codeseparator; no signature removal.
+                                const ByteView scriptCode(pbegincodehash, pend);
+
+                                size_t bytesHashed{};
+                                fSuccess = checker.CheckPQSig(vchSig, vchPubKey, scriptCode, flags, &bytesHashed);
+                                metrics.TallySigChecks(1);
+                                if (bytesHashed) {
+                                    metrics.TallyHashOp(bytesHashed, true);
+                                }
+
+                                // NULLFAIL is consensus for PQ signatures, independent of SCRIPT_VERIFY_NULLFAIL.
+                                if (!fSuccess) {
+                                    return set_error(serror, ScriptError::SIG_NULLFAIL);
+                                }
+                            }
+
+                            popstack(stack);
+                            popstack(stack);
+                            stack.push_back(fSuccess ? itemTrue : itemFalse);
+                            metrics.TallyPushOp(stack.back().size());
+                            if (opcode == OP_CHECKPQSIGVERIFY) {
+                                if (fSuccess) {
+                                    popstack(stack);
+                                } else {
+                                    return set_error(serror, ScriptError::CHECKSIGVERIFY);
+                                }
+                            }
+                        } break;
+
                         case OP_CHECKDATASIG:
                         case OP_CHECKDATASIGVERIFY: {
                             // (sig message pubkey -- bool)
@@ -2597,6 +2659,23 @@ bool TransactionSignatureChecker::CheckSig(const ByteView &vchSigIn, const std::
     if (pnBytesHashed) *pnBytesHashed = bytesHashed;
 
     return VerifySignature(vchSig, pubkey, sighash);
+}
+
+bool TransactionSignatureChecker::CheckPQSig(const ByteView &vchSigIn, const ByteView &vchPubKey,
+                                             const ByteView &scriptCode, uint32_t flags, size_t *pnBytesHashed) const {
+    if (pnBytesHashed) *pnBytesHashed = 0u;
+    if (vchSigIn.size() != pqsig::SIG_SIZE) {
+        return false;
+    }
+    // Hash type is the last byte; PQ signatures always use the FORKID (BIP143-style) digest.
+    SigHashType const sigHashType = GetHashType(vchSigIn);
+    const ByteView rawSig = vchSigIn.first(pqsig::RAW_SIG_SIZE);
+
+    const auto & [sighash, bytesHashed] = SignatureHash(scriptCode, context, sigHashType, this->txdata,
+                                                        flags | SCRIPT_ENABLE_SIGHASH_FORKID);
+    if (pnBytesHashed) *pnBytesHashed = bytesHashed;
+
+    return pqsig::Verify(vchPubKey, rawSig, sighash);
 }
 
 bool TransactionSignatureChecker::CheckLockTime(const CScriptNum &nLockTime) const {

@@ -145,6 +145,12 @@ const char *ScriptErrorString(const ScriptError serror) {
         case ScriptError::INVALID_BIT_SHIFT:
             return "Given bit shift amount is negative";
 
+        // Post-quantum signatures
+        case ScriptError::PQ_PUBKEY_ENCODING:
+            return "Post-quantum public key has the wrong length or an unknown algorithm identifier";
+        case ScriptError::PQ_SIG_ENCODING:
+            return "Post-quantum signature has the wrong length";
+
         case ScriptError::UNKNOWN:
         case ScriptError::ERROR_COUNT:
         default:

@@ -35,6 +35,8 @@ const char *GetTxnOutputType(txnouttype t) {
             return "nulldata";
         case TX_SCRIPT:
             return "script";
+        case TX_PQPUBKEYHASH:
+            return "pqpubkeyhash";
     }
     return nullptr;
 }
@@ -59,6 +61,17 @@ static bool MatchPayToPubkeyHash(const CScript &script, StackVec &pubkeyhash) {
         script[2] == 20 && script[23] == OP_EQUALVERIFY &&
         script[24] == OP_CHECKSIG) {
         pubkeyhash.assign(script.begin() + 3, script.begin() + 23);
+        return true;
+    }
+    return false;
+}
+
+/** P2PQH (spec/pq-signature.md section 4): OP_DUP OP_SHA256 <32-byte hash> OP_EQUALVERIFY OP_CHECKPQSIG */
+static bool MatchPayToPQPubkeyHash(const CScript &script, StackVec &pubkeyhash) {
+    if (script.size() == 37 && script[0] == OP_DUP && script[1] == OP_SHA256 &&
+        script[2] == 32 && script[35] == OP_EQUALVERIFY &&
+        script[36] == OP_CHECKPQSIG) {
+        pubkeyhash.assign(script.begin() + 3, script.begin() + 35);
         return true;
     }
     return false;
@@ -129,6 +142,11 @@ txnouttype Solver(const CScript &scriptPubKey, std::vector<std::vector<uint8_t>>
     if (MatchPayToPubkeyHash(scriptPubKey, data)) {
         vSolutionsRet.push_back(std::move(data));
         return TX_PUBKEYHASH;
+    }
+
+    if ((flags & SCRIPT_ENABLE_PQSIG) && MatchPayToPQPubkeyHash(scriptPubKey, data)) {
+        vSolutionsRet.push_back(std::move(data));
+        return TX_PQPUBKEYHASH;
     }
 
     unsigned int required;

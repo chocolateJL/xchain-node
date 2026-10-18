@@ -81,6 +81,8 @@ enum txnouttype {
     TX_NULL_DATA,
     // after upgrade12: p2s (pay-to-script); non-null-data bare scripts that don't match above and are <= 201 bytes
     TX_SCRIPT,     ///< p2s
+    // XCHAIN, only with SCRIPT_ENABLE_PQSIG: OP_DUP OP_SHA256 <32-byte hash> OP_EQUALVERIFY OP_CHECKPQSIG
+    TX_PQPUBKEYHASH, ///< p2pqh
 };
 
 class CNoDestination {

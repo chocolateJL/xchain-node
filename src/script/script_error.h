@@ -110,6 +110,10 @@ enum class ScriptError {
     /* Bit Shift */
     INVALID_BIT_SHIFT,
 
+    /* Post-quantum signatures (spec/pq-signature.md) */
+    PQ_PUBKEY_ENCODING,
+    PQ_SIG_ENCODING,
+
     ERROR_COUNT,
 };
 

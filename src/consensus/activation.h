@@ -93,3 +93,14 @@ int32_t GetUpgrade12ActivationHeight(const Consensus::Params &params);
 
 /** Check if May 15th, 2027 protocol upgrade has activated. */
 bool IsUpgrade2027Enabled(const Consensus::Params &params, const CBlockIndex *pindexPrev);
+
+/**
+ *  Global: If set, the user overrode the XCHAIN post-quantum activation height with -pqsigheight (regtest only).
+ *  Unit tests may also set it temporarily.
+ */
+extern std::optional<int32_t> g_PQSigHeightOverride;
+
+/** Check if the XCHAIN post-quantum rules (SCRIPT_ENABLE_PQSIG) are active for the block after pindexPrev. */
+bool IsPQSigEnabled(const Consensus::Params &params, const CBlockIndex *pindexPrev);
+/** Returns the PQ activation height (one less than the first block enforcing the rules). */
+int32_t GetPQSigActivationHeight(const Consensus::Params &params);

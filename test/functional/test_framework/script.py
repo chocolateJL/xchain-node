@@ -240,6 +240,10 @@ OP_CHECKDATASIGVERIFY = CScriptOp(0xbb)
 # additional byte string operations
 OP_REVERSEBYTES = CScriptOp(0xbc)
 
+# post-quantum signatures (XCHAIN, spec/pq-signature.md)
+OP_CHECKPQSIG = CScriptOp(0xbd)
+OP_CHECKPQSIGVERIFY = CScriptOp(0xbe)
+
 # Native Introspection opcodes
 OP_INPUTINDEX = CScriptOp(0xc0)
 OP_ACTIVEBYTECODE = CScriptOp(0xc1)
@@ -388,6 +392,8 @@ OPCODE_NAMES.update({
     OP_NOP9: 'OP_NOP9',
     OP_NOP10: 'OP_NOP10',
     OP_REVERSEBYTES: 'OP_REVERSEBYTES',
+    OP_CHECKPQSIG: 'OP_CHECKPQSIG',
+    OP_CHECKPQSIGVERIFY: 'OP_CHECKPQSIGVERIFY',
     OP_INPUTINDEX: 'OP_INPUTINDEX',
     OP_ACTIVEBYTECODE: 'OP_ACTIVEBYTECODE',
     OP_TXVERSION: 'OP_TXVERSION',
