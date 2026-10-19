@@ -62,6 +62,7 @@ add_executable(bench_bitcoin
 	mediantimepast.cpp
 	mempool_eviction.cpp
 	merkle_root.cpp
+	pqsig.cpp
 	net_messages.cpp
 	prevector.cpp
 	readwriteblock.cpp
