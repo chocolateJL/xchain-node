@@ -15,6 +15,8 @@ enum CashAddrType : uint8_t {
     SCRIPT_TYPE = 1,
     TOKEN_PUBKEY_TYPE = 2, //< Token-Aware P2PKH
     TOKEN_SCRIPT_TYPE = 3, //< Token-Aware P2SH
+    PQPUBKEY_TYPE = 4,       //< XCHAIN P2PQH (32-byte SHA-256 of the PQ public key element)
+    TOKEN_PQPUBKEY_TYPE = 5, //< XCHAIN Token-Aware P2PQH
 };
 
 struct CashAddrContent {
@@ -22,7 +24,9 @@ struct CashAddrContent {
     std::vector<uint8_t> hash;
 
     bool IsNull() const { return hash.empty(); }
-    bool IsTokenAwareType() const { return type == TOKEN_PUBKEY_TYPE || type == TOKEN_SCRIPT_TYPE; }
+    bool IsTokenAwareType() const {
+        return type == TOKEN_PUBKEY_TYPE || type == TOKEN_SCRIPT_TYPE || type == TOKEN_PQPUBKEY_TYPE;
+    }
 };
 
 std::string EncodeCashAddr(const CTxDestination &, const CChainParams &, bool tokenAwareType = false);

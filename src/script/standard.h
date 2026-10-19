@@ -51,6 +51,13 @@ public:
     bool IsP2SH_32() const { return std::get_if<uint256>(&var) != nullptr; }
 };
 
+/** XCHAIN: a P2PQH destination, the SHA-256 of the post-quantum public key element (spec/pq-signature.md). */
+class PQKeyID : public uint256 {
+public:
+    PQKeyID() noexcept : uint256() {}
+    explicit PQKeyID(const uint256 &in) noexcept : uint256(in) {}
+};
+
 /**
  * Default setting for nMaxDatacarrierBytes. 220 bytes of data, +1 for OP_RETURN, +2 for the pushdata opcodes.
  */
@@ -103,9 +110,10 @@ public:
  *  * CNoDestination: no destination set
  *  * CKeyID: TX_PUBKEYHASH destination
  *  * ScriptID: TX_SCRIPTHASH destination
+ *  * PQKeyID: TX_PQPUBKEYHASH destination (XCHAIN)
  *  A CTxDestination is the internal data type encoded in a Bitcoin Cash address
  */
-using CTxDestination = std::variant<CNoDestination, CKeyID, ScriptID>;
+using CTxDestination = std::variant<CNoDestination, CKeyID, ScriptID, PQKeyID>;
 
 /** Check whether a CTxDestination is a CNoDestination. */
 bool IsValidDestination(const CTxDestination &dest);

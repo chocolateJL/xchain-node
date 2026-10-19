@@ -5,7 +5,11 @@
 // Tests for OP_CHECKPQSIG / OP_CHECKPQSIGVERIFY and the disabled secp256k1
 // opcodes. See spec/pq-signature.md.
 
+#include <cashaddrenc.h>
+#include <chainparams.h>
 #include <core_io.h>
+#include <key_io.h>
+#include <pow.h>
 #include <crypto/sha256.h>
 #include <hash.h>
 #include <policy/policy.h>
@@ -366,6 +370,51 @@ BOOST_AUTO_TEST_CASE(standardness) {
     // Data carriers are unaffected.
     BOOST_CHECK(IsStandard(CScript() << OP_RETURN << Bytes{0xac, 0xae}, type, PQ_FLAGS));
     BOOST_CHECK_EQUAL(type, TX_NULL_DATA);
+}
+
+BOOST_AUTO_TEST_CASE(p2pqh_address) {
+    const auto params = CreateChainParams(CBaseChainParams::XCPRIV);
+    const PQKeyID id(uint256(Sha256(MakeKey(60).pubkey)));
+    const CScript p2pqh = P2PQH(MakeKey(60).pubkey);
+
+    // Script <-> destination.
+    BOOST_CHECK(GetScriptForDestination(id) == p2pqh);
+    CTxDestination dest;
+    BOOST_REQUIRE(ExtractDestination(p2pqh, dest, PQ_FLAGS));
+    BOOST_CHECK(std::get<PQKeyID>(dest) == id);
+    BOOST_CHECK(!ExtractDestination(p2pqh, dest, PQ_FLAGS & ~SCRIPT_ENABLE_PQSIG));
+
+    // CashAddr type 4 (and 5 for token-aware), 32-byte payload, round trip.
+    const std::string addr = EncodeCashAddr(id, *params);
+    BOOST_CHECK_MESSAGE(addr.rfind("xcpriv:", 0) == 0, addr);
+    bool tokenAware = true;
+    BOOST_CHECK(std::get<PQKeyID>(DecodeCashAddr(addr, *params, &tokenAware)) == id);
+    BOOST_CHECK(!tokenAware);
+    const std::string tokenAddr = EncodeCashAddr(id, *params, true);
+    BOOST_CHECK(tokenAddr != addr);
+    BOOST_CHECK(std::get<PQKeyID>(DecodeCashAddr(tokenAddr, *params, &tokenAware)) == id);
+    BOOST_CHECK(tokenAware);
+    BOOST_CHECK_EQUAL(DecodeCashAddrContent(addr, params->CashAddrPrefix()).type, PQPUBKEY_TYPE);
+
+    // A 20-byte payload with the P2PQH type is invalid.
+    const std::string bad = EncodeCashAddr(params->CashAddrPrefix(), CashAddrContent{PQPUBKEY_TYPE, Bytes(20, 1)});
+    BOOST_CHECK(std::holds_alternative<CNoDestination>(DecodeCashAddr(bad, *params)));
+
+    // No legacy (base58) form.
+    BOOST_CHECK(EncodeLegacyAddr(id, *params).empty());
+}
+
+BOOST_AUTO_TEST_CASE(xcpriv_params) {
+    const auto params = CreateChainParams(CBaseChainParams::XCPRIV);
+    const Consensus::Params &consensus = params->GetConsensus();
+    BOOST_CHECK_EQUAL(consensus.pqSigHeight, 0);
+    BOOST_CHECK_EQUAL(consensus.nPowTargetSpacing, 120);
+    BOOST_CHECK(CheckProofOfWork(params->GenesisBlock().GetHash(), params->GenesisBlock().nBits, consensus));
+    BOOST_CHECK(params->GenesisBlock().GetHash() == consensus.hashGenesisBlock);
+    BOOST_CHECK_EQUAL(params->CashAddrPrefix(), "xcpriv");
+    BOOST_CHECK_EQUAL(params->GetDefaultPort(), 41733);
+    BOOST_TEST_MESSAGE("xcpriv genesis " << consensus.hashGenesisBlock.ToString() << " merkle "
+                                         << params->GenesisBlock().hashMerkleRoot.ToString());
 }
 
 BOOST_AUTO_TEST_CASE(deterministic_signing) {

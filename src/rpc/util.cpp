@@ -104,6 +104,10 @@ void DescribeAddress(const CTxDestination &dest, UniValue::Object& obj) {
             [](const CNoDestination &) {},
             [&obj](const CKeyID &) { obj.emplace_back("isscript", false); },
             [&obj](const ScriptID &) { obj.emplace_back("isscript", true); },
+            [&obj](const PQKeyID &) {
+                obj.emplace_back("isscript", false);
+                obj.emplace_back("ispostquantum", true);
+            },
         }, dest);
 }
 

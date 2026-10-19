@@ -18,6 +18,7 @@ const std::string CBaseChainParams::TESTNET4 = "test4";
 const std::string CBaseChainParams::SCALENET = "scale";
 const std::string CBaseChainParams::CHIPNET = "chip";
 const std::string CBaseChainParams::REGTEST = "regtest";
+const std::string CBaseChainParams::XCPRIV = "xcpriv";
 
 void SetupChainParamsBaseOptions() {
     gArgs.AddArg("-regtest",
@@ -33,6 +34,8 @@ void SetupChainParamsBaseOptions() {
                  OptionsCategory::CHAINPARAMS);
     gArgs.AddArg("-chipnet", "Use the upcoming upgrade activation chain", ArgsManager::ALLOW_ANY,
                  OptionsCategory::CHAINPARAMS);
+    gArgs.AddArg("-xcpriv", "Use the XCHAIN private development chain (post-quantum signatures only)",
+                 ArgsManager::ALLOW_ANY, OptionsCategory::CHAINPARAMS);
 }
 
 static std::unique_ptr<CBaseChainParams> globalChainBaseParams;
@@ -69,6 +72,10 @@ std::unique_ptr<CBaseChainParams> CreateBaseChainParams(const std::string &chain
 
     if (chain == CBaseChainParams::REGTEST) {
         return std::make_unique<CBaseChainParams>("regtest", 18443, 18445);
+    }
+
+    if (chain == CBaseChainParams::XCPRIV) {
+        return std::make_unique<CBaseChainParams>("xcpriv", 41732, 41734);
     }
 
     throw std::runtime_error(

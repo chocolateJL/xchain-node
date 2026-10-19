@@ -132,6 +132,8 @@ std::string EncodeLegacyAddr(const CTxDestination &dest, const CChainParams &par
                 data.insert(data.end(), id.begin(), id.end());
                 return EncodeBase58Check(data);
             },
+            // XCHAIN: P2PQH has no legacy (base58) form; it is only encoded as CashAddr.
+            [](const PQKeyID &) { return std::string{}; },
             [](const CNoDestination &) { return std::string{}; }
         }, dest);
 }

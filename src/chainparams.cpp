@@ -6,6 +6,7 @@
 
 #include <chainparams.h>
 
+#include <arith_uint256.h>
 #include <chainparamsconstants.h>
 #include <chainparamsseeds.h>
 #include <consensus/consensus.h>
@@ -17,6 +18,7 @@
 
 #include <cassert>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 
@@ -1254,6 +1256,108 @@ public:
     }
 };
 
+/**
+ * XCHAIN private development network (W2 demo).
+ *
+ * All BCH upgrades and the post-quantum rules apply from genesis and there are no seeds. Like regtest, difficulty
+ * is fixed at an easy target so a CPU can mine it; ASERT needs a proof-of-work limit below 2^224 (minimum
+ * difficulty 1), which belongs to the XCHAIN testnet parameters together with a pre-mined genesis (decision D7).
+ * Economic parameters are placeholders until decisions D5-D7 (spec/decisions.md).
+ */
+class CXChainPrivParams : public CChainParams {
+public:
+    CXChainPrivParams() {
+        strNetworkID = CBaseChainParams::XCPRIV;
+        // Placeholder: 50 coins per block, halving every 1,050,000 blocks (about 4 years at 2 minutes).
+        consensus.nSubsidyHalvingInterval = 1'050'000;
+        consensus.BIP16Height = 0;
+        consensus.BIP34Height = 1;
+        consensus.BIP34Hash = BlockHash();
+        consensus.BIP65Height = 1;
+        consensus.BIP66Height = 1;
+        consensus.CSVHeight = 1;
+        consensus.powLimit = uint256S("7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        consensus.nPowTargetTimespan = 14 * 24 * 60 * 60;
+        consensus.nPowTargetSpacing = 2 * 60;
+        consensus.fPowAllowMinDifficultyBlocks = false;
+        consensus.fPowNoRetargeting = true;
+        // Unused while retargeting is off; placeholder for decision D7.
+        consensus.nASERTHalfLife = 60 * 60;
+        consensus.nMinimumChainWork = uint256S("0x00");
+        consensus.defaultAssumeValid = BlockHash();
+
+        consensus.uahfHeight = 0;
+        consensus.daaHeight = 0;
+        consensus.magneticAnomalyHeight = 0;
+        consensus.gravitonHeight = 0;
+        consensus.phononHeight = 0;
+        consensus.axionActivationTime = 0;
+        consensus.upgrade9Height = 0;
+        consensus.upgrade10Height = 0;
+        consensus.upgrade11Height = 0;
+        consensus.upgrade12Height = 0;
+        consensus.pqSigHeight = 0;
+        // BCH's tentative 2027 upgrade does not apply to XCHAIN.
+        consensus.upgrade2027ActivationTime = std::numeric_limits<int64_t>::max();
+
+        consensus.nDefaultConsensusBlockSize = DEFAULT_CONSENSUS_BLOCK_SIZE;
+        consensus.nDefaultGeneratedBlockSizePercent = 50.0;
+        assert(consensus.GetDefaultGeneratedBlockSizeBytes() <= consensus.nDefaultConsensusBlockSize);
+        consensus.ablaConfig = abla::Config::MakeDefault(consensus.nDefaultConsensusBlockSize, /* fixedSize = */ false);
+        assert(abla::State(consensus.ablaConfig, 0).GetBlockSizeLimit() == consensus.nDefaultConsensusBlockSize);
+
+        // Placeholder magic bytes and ports (decision D13: the chain is not named yet).
+        diskMagic[0] = 0xf1;
+        diskMagic[1] = 0x7a;
+        diskMagic[2] = 0x3c;
+        diskMagic[3] = 0x5e;
+        netMagic[0] = 0xe7;
+        netMagic[1] = 0x3b;
+        netMagic[2] = 0x9a;
+        netMagic[3] = 0x51;
+        nDefaultPort = 41733;
+        nPruneAfterHeight = 1000;
+        m_assumed_blockchain_size = 0;
+        m_assumed_chain_state_size = 0;
+
+        // Genesis: trivial target, so the nonce is found here; its coinbase output is unspendable (OP_RETURN).
+        constexpr uint32_t genesisTime = 1792281600; // 2026-10-18 00:00:00 UTC
+        constexpr uint32_t genesisBits = 0x207fffff;
+        const CScript genesisOutputScript = CScript() << OP_RETURN;
+        const arith_uint256 genesisTarget = arith_uint256().SetCompact(genesisBits);
+        for (uint32_t nonce = 0;; ++nonce) {
+            genesis = CreateGenesisBlock("XCHAIN private devnet 2026-10-18: ML-DSA-44 signatures only",
+                                         genesisOutputScript, genesisTime, nonce, genesisBits, 1, 50 * COIN);
+            if (UintToArith256(genesis.GetHash()) <= genesisTarget) {
+                break;
+            }
+        }
+        consensus.hashGenesisBlock = genesis.GetHash();
+        assert(consensus.hashGenesisBlock ==
+               BlockHash::fromHex("7c819d69817c34c54c63167d5e148b1506e2d712805106b780635c6acf9cfab2"));
+        assert(genesis.hashMerkleRoot ==
+               uint256S("c923437e785eba70c8abbf657595b592a0597b45a6f5aabfb514294c0bfcbfc6"));
+
+        vFixedSeeds.clear();
+        vSeeds.clear();
+
+        fDefaultConsistencyChecks = false;
+        fRequireStandard = true;
+        m_is_test_chain = true;
+
+        checkpointData = {/* .mapCheckpoints = */ {{0, genesis.GetHash()}}};
+        chainTxData = ChainTxData{0, 0, 0};
+
+        // Base58 is not used for P2PQH; kept at testnet values for the inherited code paths.
+        base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 111);
+        base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 196);
+        base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 239);
+        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x35, 0x87, 0xCF};
+        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
+        cashaddrPrefix = "xcpriv";
+    }
+};
+
 
 static std::unique_ptr<CChainParams> globalChainParams;
 
@@ -1285,6 +1389,10 @@ std::unique_ptr<CChainParams> CreateChainParams(const std::string &chain) {
 
     if (chain == CBaseChainParams::CHIPNET) {
         return std::make_unique<CChipNetParams>();
+    }
+
+    if (chain == CBaseChainParams::XCPRIV) {
+        return std::make_unique<CXChainPrivParams>();
     }
 
     throw std::runtime_error(

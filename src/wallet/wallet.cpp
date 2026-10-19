@@ -256,6 +256,9 @@ public:
         }
     }
 
+    // XCHAIN: the legacy wallet holds no post-quantum keys.
+    void operator()(const PQKeyID &) {}
+
     void operator()(const CNoDestination &) {}
 };
 

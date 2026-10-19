@@ -78,6 +78,10 @@ std::string EncodeCashAddr(const CTxDestination &dst, const CChainParams &params
                 std::vector<uint8_t> data = PackAddrData(id, tokenAwareType ? TOKEN_SCRIPT_TYPE : SCRIPT_TYPE);
                 return cashaddr::Encode(params.CashAddrPrefix(), data);
             },
+            [&params, tokenAwareType](const PQKeyID &id) {
+                std::vector<uint8_t> data = PackAddrData(id, tokenAwareType ? TOKEN_PQPUBKEY_TYPE : PQPUBKEY_TYPE);
+                return cashaddr::Encode(params.CashAddrPrefix(), data);
+            },
             [](const CNoDestination &) { return std::string{}; },
         }, dst);
 }
@@ -164,6 +168,14 @@ CTxDestination DecodeCashAddrDestination(const CashAddrContent &content) {
                 return ScriptID(uint160(content.hash)); // p2sh
             } else {
                 return ScriptID(uint256(content.hash)); // p2sh_32
+            }
+        case PQPUBKEY_TYPE:
+        case TOKEN_PQPUBKEY_TYPE:
+            // p2pqh only supports 32-byte hashes
+            if (!is20Bytes) {
+                return PQKeyID(uint256(content.hash));
+            } else {
+                return CNoDestination{};
             }
         default:
             return CNoDestination{};

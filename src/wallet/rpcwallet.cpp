@@ -3934,6 +3934,9 @@ public:
             ProcessSubScript(subscript, true);
         }
     }
+
+    // XCHAIN: the legacy wallet holds no post-quantum keys.
+    void operator()(const PQKeyID &) const {}
 };
 
 // Upstream version of this function has only two arguments and returns an intermediate UniValue object.

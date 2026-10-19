@@ -201,6 +201,10 @@ bool ExtractDestination(const CScript &scriptPubKey, CTxDestination &addressRet,
         }
         return true;
     }
+    if (whichType == TX_PQPUBKEYHASH) {
+        addressRet = PQKeyID(uint256(vSolutions[0]));
+        return true;
+    }
     // - Bare multisig txns have more than one address
     // - p2s txns have no address
     return false;
@@ -266,6 +270,10 @@ CScript GetScriptForDestination(const CTxDestination &dest) {
                     // not reached
                 }
                 return script;
+            },
+            [](const PQKeyID &id) {
+                return CScript() << OP_DUP << OP_SHA256 << std::vector<uint8_t>(id.begin(), id.end())
+                                 << OP_EQUALVERIFY << OP_CHECKPQSIG;
             }
         }, dest);
 }

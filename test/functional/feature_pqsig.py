@@ -61,6 +61,10 @@ class PQSigTest(BitcoinTestFramework):
         def good_sig(tx):
             return CScript([self.key.sign_input(tx, 0, self.spk, amount), self.key.pubkey])
 
+        decoded = node.decodescript(self.spk.hex())
+        assert_equal(decoded["type"], "pqpubkeyhash")
+        assert_equal(node.validateaddress(decoded["addresses"][0])["ispostquantum"], True)
+
         self.log.info("A P2PQH spend is accepted to the mempool and mined")
         dest = PQKey(bytes([8] * 32))
         tx = self.spend(cb, 0, good_sig, p2pqh_script(dest.pubkey))
