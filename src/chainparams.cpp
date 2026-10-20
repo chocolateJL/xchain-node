@@ -1185,8 +1185,9 @@ public:
 
         // May 15, 2026 12:00:00 UTC protocol upgrade
         consensus.upgrade12Height = 0;
-        // XCHAIN post-quantum rules: off on the inherited BCH networks (regtest: see -pqsigheight).
-        consensus.pqSigHeight = Consensus::PQSIG_DISABLED_HEIGHT;
+        // XCHAIN post-quantum rules from the first block, as on the XCHAIN networks (decision D14).
+        // Tests of the inherited secp256k1 rules turn them off with -pqsigheight=-1.
+        consensus.pqSigHeight = 0;
 
         // May 15, 2027 12:00:00 UTC tentative protocol upgrade
         consensus.upgrade2027ActivationTime = 1810382400;

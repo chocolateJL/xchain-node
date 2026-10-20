@@ -42,6 +42,8 @@ class GetblockstatsTest(BitcoinTestFramework):
                             help='Test data file')
 
     def set_test_params(self):
+        # XCHAIN: builds transactions with secp256k1 (ECDSA / Schnorr) signatures, so it runs the inherited BCH rules
+        self.inherited_bch_rules = True
         self.num_nodes = 2
         self.extra_args = [['-txindex'], ['-paytxfee=0.003']]
         self.setup_clean_chain = True

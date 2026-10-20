@@ -12,6 +12,8 @@ from test_framework.util import assert_equal
 
 class P2PBlocksOnly(BitcoinTestFramework):
     def set_test_params(self):
+        # XCHAIN: builds transactions with secp256k1 (ECDSA / Schnorr) signatures, so it runs the inherited BCH rules
+        self.inherited_bch_rules = True
         self.setup_clean_chain = False
         self.num_nodes = 1
         self.extra_args = [["-blocksonly"]]

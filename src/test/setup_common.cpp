@@ -17,6 +17,7 @@
 #include <logging.h>
 #include <miner.h>
 #include <net_processing.h>
+#include <consensus/activation.h>
 #include <noui.h>
 #include <pow.h>
 #include <pubkey.h>
@@ -71,6 +72,12 @@ BasicTestingSetup::BasicTestingSetup(const std::string &chainName)
 
     fCheckBlockIndex = true;
     SelectParams(chainName);
+    // XCHAIN: regtest enforces the post-quantum rules by default (decision D14). The inherited unit tests build and
+    // spend secp256k1 coins on regtest, so they keep the BCH rules here; pqsig_tests checks the regtest default and
+    // the functional tests run regtest with the PQ rules.
+    if (chainName == CBaseChainParams::REGTEST) {
+        ::g_PQSigHeightOverride.emplace(Consensus::PQSIG_DISABLED_HEIGHT);
+    }
     static bool noui_connected = false;
     if (!noui_connected) {
         noui_connect();
@@ -79,6 +86,7 @@ BasicTestingSetup::BasicTestingSetup(const std::string &chainName)
 }
 
 BasicTestingSetup::~BasicTestingSetup() {
+    ::g_PQSigHeightOverride.reset();
     fs::remove_all(m_path_root);
     ECC_Stop();
 }

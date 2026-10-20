@@ -1027,7 +1027,7 @@ void SetupServerArgs() {
     gArgs.AddArg(
         "-pqsigheight=<n>",
         "XCHAIN (regtest only): height after which the post-quantum rules apply (OP_CHECKPQSIG on, secp256k1 "
-        "signature opcodes off); 0 enforces them from block 1 (default: off on the inherited BCH networks)",
+        "signature opcodes off); 0 enforces them from block 1, -1 turns them off (default: 0)",
         true, OptionsCategory::DEBUG_TEST);
     gArgs.AddArg(
         "-upgrade2027activationtime=<n>",
@@ -2075,11 +2075,17 @@ bool AppInitParameterInteraction(Config &config) {
             return InitError("-pqsigheight is only allowed on regtest");
         }
         const auto height = gArgs.GetArg("-pqsigheight", 0);
-        if (height < 0 || height > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
-            return InitError("Invalid -pqsigheight, must be a positive integer in the 32-bit range");
+        if (height < -1 || height > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+            return InitError("Invalid -pqsigheight, must be -1 (off) or a non-negative integer in the 32-bit range");
         }
-        ::g_PQSigHeightOverride.emplace(static_cast<int32_t>(height));
-        LogPrintf("Using post-quantum rules activation height override: %d\n", height);
+        if (height == -1) {
+            // The inherited BCH rules (secp256k1 signatures), for tests of that code.
+            ::g_PQSigHeightOverride.emplace(Consensus::PQSIG_DISABLED_HEIGHT);
+            LogPrintf("Post-quantum rules turned off (-pqsigheight=-1)\n");
+        } else {
+            ::g_PQSigHeightOverride.emplace(static_cast<int32_t>(height));
+            LogPrintf("Using post-quantum rules activation height override: %d\n", height);
+        }
     }
 
     return true;

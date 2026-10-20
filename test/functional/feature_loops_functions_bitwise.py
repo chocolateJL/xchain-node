@@ -27,6 +27,8 @@ from test_framework.test_framework import BitcoinTestFramework
 class LoopsFunctionsBitwiseTest(BitcoinTestFramework):
 
     def set_test_params(self):
+        # XCHAIN: builds transactions with secp256k1 (ECDSA / Schnorr) signatures, so it runs the inherited BCH rules
+        self.inherited_bch_rules = True
         self.num_nodes = 1
         self.setup_clean_chain = True
         self.base_extra_args = ['-acceptnonstdtxn=0', '-expire=0', '-whitelist=127.0.0.1']

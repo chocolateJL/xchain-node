@@ -58,6 +58,8 @@ MAX_GETDATA_INBOUND_WAIT = GETDATA_TX_INTERVAL + INBOUND_PEER_TX_DELAY + TXID_RE
 
 class TxDownloadTest(BitcoinTestFramework):
     def set_test_params(self):
+        # XCHAIN: builds transactions with secp256k1 (ECDSA / Schnorr) signatures, so it runs the inherited BCH rules
+        self.inherited_bch_rules = True
         self.setup_clean_chain = False
         self.num_nodes = 2
 

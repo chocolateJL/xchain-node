@@ -62,6 +62,8 @@ INVALID_STACK_OPERATION = 'mandatory-script-verify-flag-failed (Operation not va
 class Int64CScriptNum(BitcoinTestFramework):
 
     def set_test_params(self):
+        # XCHAIN: builds transactions with secp256k1 (ECDSA / Schnorr) signatures, so it runs the inherited BCH rules
+        self.inherited_bch_rules = True
         self.num_nodes = 1
         self.block_heights = {}
         self.extra_args = [

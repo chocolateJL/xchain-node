@@ -6,7 +6,9 @@
 // opcodes. See spec/pq-signature.md.
 
 #include <cashaddrenc.h>
+#include <chain.h>
 #include <chainparams.h>
+#include <consensus/activation.h>
 #include <core_io.h>
 #include <key_io.h>
 #include <pow.h>
@@ -419,6 +421,25 @@ BOOST_AUTO_TEST_CASE(xcpriv_params) {
                                          << params->GenesisBlock().hashMerkleRoot.ToString());
 }
 
+// Decision D14: regtest enforces the PQ rules from block 1 like the XCHAIN networks; the inherited
+// BCH networks do not. -pqsigheight=-1 (an override of PQSIG_DISABLED_HEIGHT) turns them off.
+BOOST_AUTO_TEST_CASE(regtest_pq_default) {
+    BOOST_CHECK_EQUAL(CreateChainParams(CBaseChainParams::REGTEST)->GetConsensus().pqSigHeight, 0);
+    for (const auto &chain : {CBaseChainParams::MAIN, CBaseChainParams::TESTNET, CBaseChainParams::CHIPNET}) {
+        BOOST_CHECK_EQUAL(CreateChainParams(chain)->GetConsensus().pqSigHeight, Consensus::PQSIG_DISABLED_HEIGHT);
+    }
+    const auto params = CreateChainParams(CBaseChainParams::REGTEST);
+    CBlockIndex genesis;
+    genesis.nHeight = 0;
+    const auto saved = ::g_PQSigHeightOverride;
+    ::g_PQSigHeightOverride.reset();
+    BOOST_CHECK(!IsPQSigEnabled(params->GetConsensus(), nullptr));
+    BOOST_CHECK(IsPQSigEnabled(params->GetConsensus(), &genesis)); // block 1 onwards
+    ::g_PQSigHeightOverride.emplace(Consensus::PQSIG_DISABLED_HEIGHT);
+    BOOST_CHECK(!IsPQSigEnabled(params->GetConsensus(), &genesis));
+    ::g_PQSigHeightOverride = saved;
+}
+
 BOOST_AUTO_TEST_CASE(deterministic_signing) {
     const PQKey key = MakeKey(40);
     const uint256 digest = Hash(Bytes{9, 9, 9});
@@ -622,7 +643,7 @@ BOOST_AUTO_TEST_CASE(difftest) {
                 signedTx.vin[n].scriptSig = CScript() << sdkSig << key.pubkey;
                 const CTransaction stx(signedTx);
                 const Amount otherAmount = amount > Amount::zero() ? amount - SATOSHI : amount + SATOSHI;
-                for (const Amount value : {amount, otherAmount}) {
+                for (const Amount &value : {amount, otherAmount}) {
                     const CTxOut spent(value, scriptCode);
                     const ScriptExecutionContext ctx{n, spent, stx};
                     ScriptError err;

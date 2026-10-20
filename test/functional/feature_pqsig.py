@@ -8,6 +8,7 @@
 - Spends a mature coinbase with an OP_CHECKPQSIG signature through the mempool and into a block.
 - Checks that a bad signature, a wrong-length signature and an ECDSA opcode are rejected,
   and that outputs containing ECDSA opcodes are not relayed.
+- The PQ rules are regtest's default (decision D14); -pqsigheight=-1 turns them off again.
 """
 
 from test_framework.blocktools import create_block, create_coinbase
@@ -24,8 +25,9 @@ class PQSigTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
         self.setup_clean_chain = True
+        # No -pqsigheight: regtest enforces the PQ rules from block 1 by default.
         # Standard relay policy: P2PQH (37 bytes) is standard as a pay-to-script output since upgrade 12.
-        self.extra_args = [["-pqsigheight=0", "-acceptnonstdtxn=0"]]
+        self.extra_args = [["-acceptnonstdtxn=0"]]
 
     def mine(self, txns=(), script_pubkey=None):
         node = self.nodes[0]
@@ -105,6 +107,17 @@ class PQSigTest(BitcoinTestFramework):
         back = self.spend(to_ecdsa, 0, lambda tx: CScript([]), self.spk)
         assert_raises_rpc_error(-26, "Attempted to use a disabled opcode",
                                 node.sendrawtransaction, ToHex(back))
+
+        self.log.info("-pqsigheight=-1 restores the inherited BCH rules: secp256k1 opcodes on, OP_CHECKPQSIG off")
+        self.restart_node(0, extra_args=["-pqsigheight=-1"])
+        node = self.nodes[0]
+        node.sendrawtransaction(ToHex(back))
+        assert_raises_rpc_error(-26, "Opcode missing or not understood",
+                                node.sendrawtransaction, ToHex(self.spend(coinbases[2], 0, good_sig, self.spk)))
+        self.stop_node(0)
+        self.nodes[0].assert_start_raises_init_error(
+            ["-pqsigheight=-2"],
+            "Error: Invalid -pqsigheight, must be -1 (off) or a non-negative integer in the 32-bit range")
 
 
 if __name__ == "__main__":

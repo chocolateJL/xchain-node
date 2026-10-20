@@ -104,6 +104,10 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.rpc_timeout = 60
         self.supports_cli = False
         self.bind_to_localhost_only = True
+        # XCHAIN: regtest enforces the post-quantum rules from block 1 (OP_CHECKPQSIG, no secp256k1 signature
+        # opcodes). Tests of the inherited BCH secp256k1 rules set this in set_test_params() to run their nodes
+        # with -pqsigheight=-1.
+        self.inherited_bch_rules = False
 
     def main(self):
         """Main function. This should not be overridden by the subclass test scripts."""
@@ -320,6 +324,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             extra_confs = [["bind=127.0.0.1"]] * num_nodes
         else:
             extra_confs = [[]] * num_nodes
+        if self.inherited_bch_rules:
+            extra_confs = [conf + ["pqsigheight=-1"] for conf in extra_confs]
         if extra_args is None:
             extra_args = [[]] * num_nodes
         if binary is None:
