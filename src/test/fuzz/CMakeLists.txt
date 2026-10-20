@@ -97,3 +97,28 @@ add_fuzz_target(
     # Sources
     rolling_bloom_filter.cpp
 )
+
+# XCHAIN: ML-DSA-44 / OP_CHECKPQSIG targets (spec/pq-signature.md)
+add_fuzz_target(
+    fuzz-pqsig_encoding
+    pqsig_encoding
+
+    # Sources
+    pqsig_encoding.cpp
+)
+
+add_fuzz_target(
+    fuzz-pqsig_verify
+    pqsig_verify
+
+    # Sources
+    pqsig_verify.cpp
+)
+
+add_fuzz_target(
+    fuzz-pqsig_script
+    pqsig_script
+
+    # Sources
+    pqsig_script.cpp
+)

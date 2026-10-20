@@ -1,4 +1,4 @@
-# XCHAIN CI: build the node, run the post-quantum tests and the full unit suite.
+# XCHAIN CI: build the node, run the post-quantum tests and the full unit suite, and fuzz the post-quantum code.
 # Runs on pushes and pull requests to xchain/* branches. The full functional suite (about 200 tests) only runs when
 # started by hand (Actions -> xchain-ci -> Run workflow -> full_functional), to save private-repo minutes.
 name: xchain-ci
@@ -14,6 +14,10 @@ on:
         description: 'Also run the full functional test suite'
         type: boolean
         default: false
+      fuzz_seconds:
+        description: 'Seconds to run each fuzz target'
+        type: number
+        default: 120
 
 concurrency:
   group: xchain-ci-${{ github.ref }}
@@ -87,3 +91,74 @@ jobs:
             ${{ runner.temp }}/ft_*/**/*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  # libFuzzer with address and undefined-behaviour sanitizers. Replays the seed corpus in test/fuzz/xchain-corpus,
+  # then fuzzes each target for a fixed time. New corpus entries are kept in the Actions cache between runs.
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 1G
+      CCACHE_COMPRESS: 'true'
+      FUZZ_SECONDS: ${{ inputs.fuzz_seconds || 120 }}
+      TARGETS: pqsig_encoding pqsig_verify pqsig_script script_flags transaction_deserialize
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm cmake ninja-build pkg-config python3 ccache \
+            libboost-chrono-dev libboost-filesystem-dev libboost-test-dev libboost-thread-dev \
+            libevent-dev libssl-dev libgmp-dev zlib1g-dev
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-fuzz-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-fuzz-${{ runner.os }}-
+
+      - name: Restore fuzz corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz-corpus
+          key: fuzz-corpus-${{ github.sha }}
+          restore-keys: fuzz-corpus-
+
+      - name: Configure
+        run: >
+          cmake -S . -B build-fuzz -GNinja
+          -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          -DENABLE_SANITIZERS="fuzzer;address;undefined"
+          -DBUILD_BITCOIN_WALLET=OFF -DBUILD_BITCOIN_QT=OFF -DBUILD_BITCOIN_ZMQ=OFF -DBUILD_BITCOIN_SEEDER=OFF
+          -DENABLE_UPNP=OFF -DENABLE_NATPMP=OFF -DENABLE_MAN=OFF -DBUILD_LIBBITCOINCONSENSUS=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: ninja -C build-fuzz $(printf 'fuzz-%s ' $TARGETS)
+
+      - name: Fuzz
+        run: |
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          mkdir -p fuzz-crashes
+          for t in $TARGETS; do
+            mkdir -p fuzz-corpus/$t
+            seeds=test/fuzz/xchain-corpus/$t
+            [ -d "$seeds" ] || seeds=
+            echo "::group::$t ($FUZZ_SECONDS s)"
+            build-fuzz/src/test/fuzz/$t -max_total_time=$FUZZ_SECONDS -max_len=20000 -print_final_stats=1 \
+              -artifact_prefix=fuzz-crashes/$t- fuzz-corpus/$t $seeds
+            echo "::endgroup::"
+          done
+
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes
+          path: fuzz-crashes
+          if-no-files-found: ignore
+          retention-days: 30

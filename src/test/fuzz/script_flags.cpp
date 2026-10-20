@@ -101,7 +101,11 @@ static bool IsValidFlagCombination(uint32_t flags) {
     // If the CLEANSTACK flag is set, then P2SH should also be set
     return ((~flags & SCRIPT_VERIFY_CLEANSTACK) || (flags & SCRIPT_VERIFY_P2SH))
             // Additionally, if P2SH_32 is set, P2SH should also be set
-            && ((~flags & SCRIPT_ENABLE_P2SH_32) || (flags & SCRIPT_VERIFY_P2SH));
+            && ((~flags & SCRIPT_ENABLE_P2SH_32) || (flags & SCRIPT_VERIFY_P2SH))
+            // XCHAIN: upgrades activate in order, so the May 2026 rules (e.g. OP_LSHIFTNUM) never run without the
+            // May 2025 VM limits and big integers. Found by this fuzzer: with MAY2026 but not MAY2025, adding
+            // MAY2025 turned an UNKNOWN error into success, which IsExpected() does not tolerate.
+            && ((~flags & SCRIPT_ENABLE_MAY2026) || (flags & SCRIPT_ENABLE_MAY2025));
 }
 
 static bool IsExpected(bool ret, bool ret_fuzzed, uint32_t verify_flags, ScriptError serror,
@@ -119,7 +123,9 @@ static bool IsExpected(bool ret, bool ret_fuzzed, uint32_t verify_flags, ScriptE
     // differing for the script flags that we know added opcodes to the interpreter.
     if (is_bad_opcode(serror) || is_bad_opcode(serror_fuzzed)) {
         const uint32_t flags_that_added_opcodes[] = {
-            SCRIPT_ENABLE_TOKENS, SCRIPT_ENABLE_MAY2026
+            SCRIPT_ENABLE_TOKENS, SCRIPT_ENABLE_MAY2026,
+            // XCHAIN: adds OP_CHECKPQSIG(VERIFY) and disables the secp256k1 signature opcodes
+            SCRIPT_ENABLE_PQSIG,
         };
         for (const uint32_t flag : flags_that_added_opcodes) {
             if ((verify_flags_fuzzed & flag) != (verify_flags & flag)) {
