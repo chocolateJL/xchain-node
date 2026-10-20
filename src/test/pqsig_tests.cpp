@@ -30,6 +30,8 @@
 #include <array>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
+#include <string>
 #include <vector>
 
 namespace {
@@ -548,6 +550,100 @@ BOOST_AUTO_TEST_CASE(test_vectors) {
         BOOST_REQUIRE(out);
         out << UniValue::stringify(root, 2) << "\n";
     }
+}
+
+// Differential test against the SDKs: replays a case file from lab/difftest/gen_cases.py
+// (random transactions signed by the Python SDK) and recomputes everything with the node's
+// code. Skipped unless XCHAIN_DIFFTEST names the file.
+BOOST_AUTO_TEST_CASE(difftest) {
+    const char *path = std::getenv("XCHAIN_DIFFTEST");
+    if (!path) {
+        BOOST_TEST_MESSAGE("XCHAIN_DIFFTEST not set; skipping");
+        return;
+    }
+    std::ifstream in(path);
+    BOOST_REQUIRE(in);
+    const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    UniValue doc;
+    BOOST_REQUIRE(doc.read(text));
+    BOOST_REQUIRE_EQUAL(doc["format"].get_str(), "xchain-difftest/1");
+    const auto hex = [](const auto &bytes) { return HexStr(bytes.begin(), bytes.end()); };
+
+    std::vector<PQKey> keys;
+    for (const UniValue &k : doc["keys"].get_array()) {
+        const Bytes seedBytes = ParseHex(k["seed"].get_str());
+        BOOST_REQUIRE_EQUAL(seedBytes.size(), pqsig::SEED_SIZE);
+        std::array<uint8_t, pqsig::SEED_SIZE> seed;
+        std::copy(seedBytes.begin(), seedBytes.end(), seed.begin());
+        PQKey key;
+        BOOST_REQUIRE(pqsig::KeyPairFromSeed(seed, key.pubkey, key.secret));
+        BOOST_CHECK_EQUAL(hex(key.pubkey), k["pubkey"].get_str());
+        keys.push_back(std::move(key));
+    }
+
+    size_t nCases = 0, nInputs = 0, nScripts = 0;
+    for (const UniValue &c : doc["cases"].get_array()) {
+        CMutableTransaction mtx;
+        BOOST_REQUIRE(DecodeHexTx(mtx, c["tx"].get_str()));
+        const CTransaction tx(mtx);
+        BOOST_CHECK_EQUAL(EncodeHexTx(tx), c["tx"].get_str());
+        BOOST_CHECK_EQUAL(tx.GetId().GetHex(), c["txid"].get_str());
+        const auto &inputs = c["inputs"].get_array();
+        BOOST_REQUIRE_EQUAL(inputs.size(), tx.vin.size());
+        for (unsigned n = 0; n < inputs.size(); ++n) {
+            const UniValue &inp = inputs[n];
+            const std::string where = strprintf("case %u input %u (%s)", nCases, n, inp["kind"].get_str());
+            const PQKey &key = keys.at(inp["key"].get_int());
+            const Bytes codeBytes = ParseHex(inp["script_code"].get_str());
+            const CScript scriptCode(codeBytes.begin(), codeBytes.end());
+            const Amount amount = int64_t(std::stoull(inp["amount"].get_str())) * SATOSHI;
+            const SigHashType sigHashType(uint32_t(inp["hash_type"].get_int()));
+            const CTxOut coin(amount, scriptCode);
+
+            const ScriptExecutionContext context{n, coin, tx};
+            const uint256 digest =
+                SignatureHash(ByteView(codeBytes.data(), codeBytes.size()), context, sigHashType, nullptr, PQ_FLAGS)
+                    .signatureHash;
+            BOOST_CHECK_MESSAGE(hex(digest) == inp["digest"].get_str(), where << ": signature hash differs");
+
+            Bytes sig;
+            BOOST_REQUIRE(pqsig::SignDeterministic(key.secret, digest, sig));
+            sig.push_back(uint8_t(sigHashType.getRawSigHashType()));
+            BOOST_CHECK_MESSAGE(hex(sig) == inp["sig"].get_str(), where << ": deterministic signature differs");
+
+            const Bytes sdkSig = ParseHex(inp["sig"].get_str());
+            BOOST_REQUIRE_EQUAL(sdkSig.size(), pqsig::SIG_SIZE);
+            BOOST_CHECK_MESSAGE(pqsig::Verify(key.pubkey, ByteView(sdkSig.data(), pqsig::RAW_SIG_SIZE), digest),
+                                where << ": SDK signature does not verify");
+
+            // P2PQH coins: run the whole script, and check that the amount is committed.
+            if (inp["kind"].get_str() == "p2pqh") {
+                CMutableTransaction signedTx = mtx;
+                signedTx.vin[n].scriptSig = CScript() << sdkSig << key.pubkey;
+                const CTransaction stx(signedTx);
+                const Amount otherAmount = amount > Amount::zero() ? amount - SATOSHI : amount + SATOSHI;
+                for (const Amount value : {amount, otherAmount}) {
+                    const CTxOut spent(value, scriptCode);
+                    const ScriptExecutionContext ctx{n, spent, stx};
+                    ScriptError err;
+                    const bool ok = VerifyScript(stx.vin[n].scriptSig, scriptCode, PQ_FLAGS,
+                                                 TransactionSignatureChecker(ctx), &err);
+                    if (value == amount) {
+                        BOOST_CHECK_MESSAGE(ok, where << ": script fails: " << ScriptErrorString(err));
+                    } else {
+                        BOOST_CHECK_MESSAGE(!ok && err == ScriptError::SIG_NULLFAIL,
+                                            where << ": passes with a different amount");
+                    }
+                }
+                ++nScripts;
+            }
+            ++nInputs;
+        }
+        ++nCases;
+    }
+    BOOST_TEST_MESSAGE(strprintf("difftest: %u cases, %u inputs, %u full P2PQH scripts (seed %s)", nCases, nInputs,
+                                 nScripts, doc["seed"].getValStr()));
+    BOOST_CHECK(nInputs > 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
