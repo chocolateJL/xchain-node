@@ -138,7 +138,10 @@ static bool IsExpected(bool ret, bool ret_fuzzed, uint32_t verify_flags, ScriptE
              || serror == ScriptError::INVALID_NUMBER_RANGE_64_BIT || serror_fuzzed == ScriptError::INVALID_NUMBER_RANGE_64_BIT
              || serror == ScriptError::OP_COST || serror_fuzzed == ScriptError::OP_COST
              || serror == ScriptError::TOO_MANY_HASH_ITERS || serror_fuzzed == ScriptError::TOO_MANY_HASH_ITERS
-             || serror == ScriptError::CONDITIONAL_STACK_DEPTH || serror_fuzzed == ScriptError::CONDITIONAL_STACK_DEPTH) {
+             || serror == ScriptError::CONDITIONAL_STACK_DEPTH || serror_fuzzed == ScriptError::CONDITIONAL_STACK_DEPTH
+             // XCHAIN: May 2025 also raised the push / stack element limit from 520 to 10,000 bytes. Found by this
+             // fuzzer in CI: OP_ACTIVEBYTECODE pushed a 600+ byte script, which fails once MAY2025 is removed.
+             || serror == ScriptError::PUSH_SIZE || serror_fuzzed == ScriptError::PUSH_SIZE) {
         if ((verify_flags_fuzzed & SCRIPT_ENABLE_MAY2025) != (verify_flags & SCRIPT_ENABLE_MAY2025)) {
             return true;
         }
