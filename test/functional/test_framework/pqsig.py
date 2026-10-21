@@ -30,7 +30,7 @@ SECRET_KEY_SIZE = 2560
 RAW_SIG_SIZE = 2420
 PUBKEY_SIZE = 1 + RAW_PUBKEY_SIZE
 SIG_SIZE = RAW_SIG_SIZE + 1
-# Placeholder until the chain is named (decision D13); must match script/pqsig.h.
+# "XCHAIN" from the chain name xChain (decision D13); must match script/pqsig.h.
 CONTEXT = b"XCHAIN-tx-v1"
 
 _lib = None

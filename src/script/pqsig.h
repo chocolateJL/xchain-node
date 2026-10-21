@@ -32,7 +32,7 @@ inline constexpr size_t PUBKEY_SIZE = 1 + RAW_PUBKEY_SIZE;
 /** Signature stack element: raw ML-DSA-44 signature + sighash type byte. */
 inline constexpr size_t SIG_SIZE = RAW_SIG_SIZE + 1;
 
-/** FIPS 204 context string. "XCHAIN" is a placeholder until the chain is named (decision D13). */
+/** FIPS 204 context string; "XCHAIN" from the chain name xChain (decision D13). */
 inline constexpr char CONTEXT[] = "XCHAIN-tx-v1";
 inline constexpr size_t CONTEXT_SIZE = sizeof(CONTEXT) - 1;
 

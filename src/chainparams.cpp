@@ -1307,7 +1307,8 @@ public:
         consensus.ablaConfig = abla::Config::MakeDefault(consensus.nDefaultConsensusBlockSize, /* fixedSize = */ false);
         assert(abla::State(consensus.ablaConfig, 0).GetBlockSizeLimit() == consensus.nDefaultConsensusBlockSize);
 
-        // Placeholder magic bytes and ports (decision D13: the chain is not named yet).
+        // Private devnet magic bytes and ports. Mainnet and testnet (chain name xChain, decision D13)
+        // get their own when their parameters are set.
         diskMagic[0] = 0xf1;
         diskMagic[1] = 0x7a;
         diskMagic[2] = 0x3c;
