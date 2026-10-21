@@ -306,9 +306,10 @@ BOOST_AUTO_TEST_CASE(multisig_template) {
     }
     BOOST_CHECK_EQUAL(MultisigScriptSig({s1, s2, {}}, redeem).size(), 8809u);
 
-    // Three ML-DSA-44 signatures plus this redeem script already exceed the 10,000-byte script limit (D10).
+    // Three valid signatures (11,232 bytes, within the 20,000-byte PQ unlocking limit of D10) make the sum 3,
+    // so OP_NUMEQUAL fails: exactly k signatures are required.
     BOOST_CHECK(!spend.Verify(MultisigScriptSig({s1, s2, s3}, redeem), err));
-    BOOST_CHECK_EQUAL(err, ScriptError::SCRIPT_SIZE);
+    BOOST_CHECK_EQUAL(err, ScriptError::EVAL_FALSE);
 
     // The template requires exactly k signatures: a 1-of-2 with both signatures fails OP_NUMEQUAL.
     const std::vector<PQKey> pair{keys[0], keys[1]};
@@ -330,21 +331,61 @@ BOOST_AUTO_TEST_CASE(multisig_template) {
 }
 
 BOOST_AUTO_TEST_CASE(multisig_size_limit) {
-    // 3-of-5 exceeds the current 10,000-byte script limit (decision D10 in spec/decisions.md).
+    // Decision D10: under the PQ rules a push-only unlocking script may be 20,000 bytes (other scripts and
+    // stack elements stay at 10,000), so a 3-of-5 ML-DSA multisig (13,872 bytes) is valid and standard.
     std::vector<PQKey> keys;
-    for (uint8_t i = 0; i < 5; ++i) keys.push_back(MakeKey(30 + i));
-    const CScript redeem = MultisigRedeemScript(3, keys);
+    for (uint8_t i = 0; i < 7; ++i) keys.push_back(MakeKey(30 + i));
+    const std::vector<PQKey> five(keys.begin(), keys.begin() + 5);
+    const CScript redeem = MultisigRedeemScript(3, five);
     BOOST_CHECK_EQUAL(redeem.size(), 6595u);
     Spend spend(P2SH32(redeem));
 
     std::vector<Bytes> sigs(5);
-    for (size_t i = 0; i < 3; ++i) sigs[i] = SignInput(spend.tx, spend.Spent(), redeem, keys[i]);
+    for (size_t i = 0; i < 3; ++i) sigs[i] = SignInput(spend.tx, spend.Spent(), redeem, five[i]);
     const CScript scriptSig = MultisigScriptSig(sigs, redeem);
     BOOST_CHECK_EQUAL(scriptSig.size(), 13872u);
 
     ScriptError err;
-    BOOST_CHECK(!spend.Verify(scriptSig, err));
+    ScriptExecutionMetrics metrics;
+    BOOST_CHECK(spend.Verify(scriptSig, err, PQ_FLAGS, &metrics));
+    BOOST_CHECK_MESSAGE(err == ScriptError::OK, ScriptErrorString(err));
+    BOOST_CHECK_EQUAL(metrics.GetSigChecks(), 3);
+
+    // The larger limit needs a push-only unlocking script: one non-push opcode brings back 10,000 bytes.
+    CScript notPushOnly = scriptSig;
+    notPushOnly << OP_NOP;
+    BOOST_CHECK(!spend.Verify(notPushOnly, err, PQ_FLAGS & ~SCRIPT_VERIFY_SIGPUSHONLY));
     BOOST_CHECK_EQUAL(err, ScriptError::SCRIPT_SIZE);
+
+    // Relay policy follows: 13,872 bytes pass the scriptSig size rule.
+    std::string reason;
+    CMutableTransaction tx = spend.tx;
+    tx.vin[0].scriptSig = scriptSig;
+    IsStandardTx(CTransaction(tx), reason, PQ_FLAGS);
+    BOOST_CHECK(reason != "scriptsig-size");
+
+    // 4-of-7 (18,935 bytes) still fits; 5-of-7 (21,358 bytes) is over the limit.
+    const CScript redeem7 = MultisigRedeemScript(4, keys);
+    Spend spend7(P2SH32(redeem7));
+    std::vector<Bytes> sigs7(7);
+    for (size_t i = 0; i < 4; ++i) sigs7[i] = SignInput(spend7.tx, spend7.Spent(), redeem7, keys[i]);
+    const CScript fourOfSeven = MultisigScriptSig(sigs7, redeem7);
+    BOOST_CHECK_EQUAL(fourOfSeven.size(), 18935u);
+    BOOST_CHECK(spend7.Verify(fourOfSeven, err, PQ_FLAGS));
+    BOOST_CHECK_MESSAGE(err == ScriptError::OK, ScriptErrorString(err));
+
+    const CScript redeem57 = MultisigRedeemScript(5, keys);
+    Spend spend57(P2SH32(redeem57));
+    std::vector<Bytes> sigs57(7);
+    for (size_t i = 0; i < 5; ++i) sigs57[i] = SignInput(spend57.tx, spend57.Spent(), redeem57, keys[i]);
+    const CScript tooBig = MultisigScriptSig(sigs57, redeem57);
+    BOOST_CHECK_EQUAL(tooBig.size(), 21358u);
+    BOOST_CHECK(!spend57.Verify(tooBig, err, PQ_FLAGS));
+    BOOST_CHECK_EQUAL(err, ScriptError::SCRIPT_SIZE);
+    tx = spend57.tx;
+    tx.vin[0].scriptSig = tooBig;
+    BOOST_CHECK(!IsStandardTx(CTransaction(tx), reason, PQ_FLAGS));
+    BOOST_CHECK_EQUAL(reason, "scriptsig-size");
 }
 
 BOOST_AUTO_TEST_CASE(standardness) {
@@ -374,6 +415,17 @@ BOOST_AUTO_TEST_CASE(standardness) {
     // Data carriers are unaffected.
     BOOST_CHECK(IsStandard(CScript() << OP_RETURN << Bytes{0xac, 0xae}, type, PQ_FLAGS));
     BOOST_CHECK_EQUAL(type, TX_NULL_DATA);
+
+    // Decision D17: at 1 sat/byte a P2PQH output (46 bytes) is dust below 46 + 3,783 = 3,829 satoshis,
+    // the cost of spending it; BCH's rule would give 3 * (46 + 148) = 582.
+    const CFeeRate oneSatPerByte(1000 * SATOSHI);
+    BOOST_CHECK_EQUAL(GetDustThreshold(CTxOut(Amount::zero(), p2pqh), oneSatPerByte, PQ_FLAGS), 3829 * SATOSHI);
+    BOOST_CHECK(IsDust(CTxOut(3828 * SATOSHI, p2pqh), oneSatPerByte, PQ_FLAGS));
+    BOOST_CHECK(!IsDust(CTxOut(3829 * SATOSHI, p2pqh), oneSatPerByte, PQ_FLAGS));
+    BOOST_CHECK_EQUAL(GetDustThreshold(CTxOut(Amount::zero(), p2pqh), oneSatPerByte, PQ_FLAGS & ~SCRIPT_ENABLE_PQSIG),
+                      582 * SATOSHI);
+    BOOST_CHECK_EQUAL(GetDustThreshold(CTxOut(Amount::zero(), CScript() << OP_RETURN), oneSatPerByte, PQ_FLAGS),
+                      Amount::zero());
 }
 
 BOOST_AUTO_TEST_CASE(p2pqh_address) {
@@ -544,8 +596,8 @@ BOOST_AUTO_TEST_CASE(test_vectors) {
     const Bytes m2 = SignInput(ms.tx, ms.Spent(), redeem, msKeys[1], SigHashType().withFork(), true);
     const Bytes m3 = SignInput(ms.tx, ms.Spent(), redeem, msKeys[2], SigHashType().withFork(), true);
     addCase("multisig_2of3_keys_1_3", ms, MultisigScriptSig({m1, {}, m3}, redeem), ScriptError::OK);
-    addCase("multisig_2of3_three_signatures_too_big", ms, MultisigScriptSig({m1, m2, m3}, redeem),
-            ScriptError::SCRIPT_SIZE);
+    addCase("multisig_2of3_three_signatures", ms, MultisigScriptSig({m1, m2, m3}, redeem),
+            ScriptError::EVAL_FALSE);
     const std::vector<PQKey> pair{msKeys[0], msKeys[1]};
     const CScript redeem12 = MultisigRedeemScript(1, pair);
     Spend ms12(P2SH32(redeem12));

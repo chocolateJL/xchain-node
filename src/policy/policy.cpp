@@ -16,7 +16,7 @@
 #include <util/system.h>
 #include <validation.h>
 
-Amount GetDustThreshold(const CTxOut &txout, const CFeeRate &dustRelayFeeIn) {
+Amount GetDustThreshold(const CTxOut &txout, const CFeeRate &dustRelayFeeIn, uint32_t flags) {
     /**
      * "Dust" is defined in terms of dustRelayFee, which has units
      * satoshis-per-kilobyte. If you'd pay more than 1/3 in fees to spend
@@ -30,14 +30,19 @@ Amount GetDustThreshold(const CTxOut &txout, const CFeeRate &dustRelayFeeIn) {
 
     size_t nSize = GetSerializeSize(txout);
 
+    if (flags & SCRIPT_ENABLE_PQSIG) {
+        // XCHAIN (D17): one ML-DSA-44 input is ~20 times a secp256k1 one, so the input's own cost is the measure.
+        return dustRelayFeeIn.GetFee(nSize + P2PQH_INPUT_SPEND_SIZE);
+    }
+
     // the 148 mentioned above
     nSize += (32 + 4 + 1 + 107 + 4);
 
     return 3 * dustRelayFeeIn.GetFee(nSize);
 }
 
-bool IsDust(const CTxOut &txout, const CFeeRate &dustRelayFeeIn) {
-    return (txout.nValue < GetDustThreshold(txout, dustRelayFeeIn));
+bool IsDust(const CTxOut &txout, const CFeeRate &dustRelayFeeIn, uint32_t flags) {
+    return (txout.nValue < GetDustThreshold(txout, dustRelayFeeIn, flags));
 }
 
 /** True if the script contains a secp256k1 signature opcode (disabled under the XCHAIN PQ rules). */
@@ -110,8 +115,10 @@ bool IsStandardTx(const CTransaction &tx, std::string &reason, uint32_t flags) {
 
     // Pre-upgrade 12, we always had the standardness rule that scriptSigs could not exceed 1,650 bytes.
     // Post-upgrade 12, we relax this limit to the maximum script size (10,000 bytes).
-    const size_t maxScriptSigSize = !(flags & SCRIPT_ENABLE_MAY2026) ? MAX_TX_IN_SCRIPT_SIG_SIZE_LEGACY
-                                                                     : MAX_SCRIPT_SIZE;
+    // XCHAIN (decision D10): under the PQ rules, up to 20,000 bytes so that ML-DSA multisig (3-of-5) relays.
+    const size_t maxScriptSigSize = (flags & SCRIPT_ENABLE_PQSIG)       ? MAX_PQ_UNLOCKING_SCRIPT_SIZE
+                                    : !(flags & SCRIPT_ENABLE_MAY2026) ? MAX_TX_IN_SCRIPT_SIG_SIZE_LEGACY
+                                                                        : MAX_SCRIPT_SIZE;
 
     for (const CTxIn &txin : tx.vin) {
         if (txin.scriptSig.size() > maxScriptSigSize) {
@@ -148,7 +155,7 @@ bool IsStandardTx(const CTransaction &tx, std::string &reason, uint32_t flags) {
         } else if ((whichType == TX_MULTISIG) && (!fIsBareMultisigStd)) {
             reason = "bare-multisig";
             return false;
-        } else if (IsDust(txout, ::dustRelayFee)) {
+        } else if (IsDust(txout, ::dustRelayFee, flags)) {
             reason = "dust";
             return false;
         }

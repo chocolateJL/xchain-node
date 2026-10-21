@@ -143,9 +143,15 @@ static constexpr uint32_t STANDARD_NOT_MANDATORY_VERIFY_FLAGS =
 static constexpr uint32_t STANDARD_LOCKTIME_VERIFY_FLAGS =
     LOCKTIME_VERIFY_SEQUENCE | LOCKTIME_MEDIAN_TIME_PAST;
 
-Amount GetDustThreshold(const CTxOut &txout, const CFeeRate &dustRelayFee);
+/**
+ * XCHAIN (decision D17): with SCRIPT_ENABLE_PQSIG in `flags`, an output is dust when spending it would cost more
+ * than it is worth at dustRelayFee: its own size plus one signed P2PQH input (P2PQH_INPUT_SPEND_SIZE bytes),
+ * 3,829 satoshis for a P2PQH output at 1 sat/byte. Without the flag, BCH's rule (three times a 148-byte input).
+ */
+static constexpr size_t P2PQH_INPUT_SPEND_SIZE = 32 + 4 + 3 + 3740 + 4;
+Amount GetDustThreshold(const CTxOut &txout, const CFeeRate &dustRelayFee, uint32_t flags = 0);
 
-bool IsDust(const CTxOut &txout, const CFeeRate &dustRelayFee);
+bool IsDust(const CTxOut &txout, const CFeeRate &dustRelayFee, uint32_t flags = 0);
 
 bool IsStandard(const CScript &scriptPubKey, txnouttype &whichType, uint32_t flags);
 

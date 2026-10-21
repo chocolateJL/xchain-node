@@ -331,13 +331,13 @@ class EvalStack {
     std::list<EvalFrame> evalFrames; ///< NB: We use a list here to get stable references to contained objects
 
 public:
-    explicit EvalStack(const CScript *outermostScript) {
+    EvalStack(const CScript *outermostScript, size_t maxOutermostSize) {
         assert(outermostScript != nullptr);
-        pushFrame(*outermostScript);
+        pushFrame(*outermostScript, maxOutermostSize);
     }
 
-    void pushFrame(const ByteView &script) {
-        if (script.size() > MAX_SCRIPT_SIZE) {
+    void pushFrame(const ByteView &script, size_t maxSize = MAX_SCRIPT_SIZE) {
+        if (script.size() > maxSize) {
             // Size check consensus rule (enforced here on push for belt-and-suspenders)
             throw ScriptEvaluationError(ScriptError::SCRIPT_SIZE);
         }
@@ -369,7 +369,8 @@ public:
 
 template<bool UsesBigInt>
 bool EvalScriptImpl(StackT &stack, const CScript &initialScript, uint32_t flags,
-                    const BaseSignatureChecker &checker, ScriptExecutionMetrics &metrics, ScriptError *serror) {
+                    const BaseSignatureChecker &checker, ScriptExecutionMetrics &metrics, ScriptError *serror,
+                    size_t maxScriptSize) {
     // UsesBigInt template arg must match flags
     assert(UsesBigInt == bool(flags & SCRIPT_ENABLE_MAY2025));
     using ScriptNumType = std::conditional_t<UsesBigInt, FastBigNum, CScriptNum>;
@@ -378,7 +379,7 @@ bool EvalScriptImpl(StackT &stack, const CScript &initialScript, uint32_t flags,
     static const StackItem itemFalse(StackVec(0), false);
     static const StackItem itemTrue(StackVec(1, 1), true);
 
-    if (initialScript.size() > MAX_SCRIPT_SIZE) {
+    if (initialScript.size() > maxScriptSize) {
         return set_error(serror, ScriptError::SCRIPT_SIZE);
     }
 
@@ -413,7 +414,7 @@ bool EvalScriptImpl(StackT &stack, const CScript &initialScript, uint32_t flags,
 
     try {
         // Initial frame for the top-level script (zero-copy view)
-        EvalStack evalStack(&initialScript);
+        EvalStack evalStack(&initialScript, maxScriptSize);
 
         do {
             EvalFrame &curFrame = evalStack.top();
@@ -2772,13 +2773,19 @@ bool TransactionSignatureChecker::CheckSequence(const CScriptNum &nSequence) con
     return true;
 }
 
+static bool EvalScriptSized(StackT &stack, const CScript &script, uint32_t flags,
+                            const BaseSignatureChecker &checker, ScriptExecutionMetrics &metrics, ScriptError *serror,
+                            size_t maxScriptSize) {
+    if (flags & SCRIPT_ENABLE_MAY2025) {
+        return EvalScriptImpl<true>(stack, script, flags, checker, metrics, serror, maxScriptSize);
+    } else {
+        return EvalScriptImpl<false>(stack, script, flags, checker, metrics, serror, maxScriptSize);
+    }
+}
+
 bool EvalScript(StackT &stack, const CScript &script, uint32_t flags,
                 const BaseSignatureChecker &checker, ScriptExecutionMetrics &metrics, ScriptError *serror) {
-    if (flags & SCRIPT_ENABLE_MAY2025) {
-        return EvalScriptImpl<true>(stack, script, flags, checker, metrics, serror);
-    } else {
-        return EvalScriptImpl<false>(stack, script, flags, checker, metrics, serror);
-    }
+    return EvalScriptSized(stack, script, flags, checker, metrics, serror, MAX_SCRIPT_SIZE);
 }
 
 bool VerifyScript(const CScript &scriptSig, const CScript &scriptPubKey, uint32_t flags, const BaseSignatureChecker &checker,
@@ -2802,8 +2809,12 @@ bool VerifyScript(const CScript &scriptSig, const CScript &scriptPubKey, uint32_
         metrics.SetScriptLimits(flags, scriptSig.size());
     }
 
+    // XCHAIN (decision D10): under the PQ rules a push-only unlocking script may be up to 20,000 bytes.
+    const size_t maxScriptSigSize = (flags & SCRIPT_ENABLE_PQSIG) && scriptSigIsKnownToBePushOnly
+                                        ? MAX_PQ_UNLOCKING_SCRIPT_SIZE
+                                        : MAX_SCRIPT_SIZE;
     StackT stack, stackCopy;
-    if ( ! EvalScript(stack, scriptSig, flags, checker, metrics, serror)) {
+    if ( ! EvalScriptSized(stack, scriptSig, flags, checker, metrics, serror, maxScriptSigSize)) {
         // serror is set
         return false;
     }

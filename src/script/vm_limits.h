@@ -18,6 +18,11 @@ static constexpr int MAX_PUBKEYS_PER_MULTISIG = 20;
 // Maximum script length in bytes
 static constexpr int MAX_SCRIPT_SIZE = 10000;
 
+// XCHAIN (decision D10): with SCRIPT_ENABLE_PQSIG, a push-only unlocking script (scriptSig) may be up to this
+// long, so that ML-DSA multisig fits (3-of-5 needs 13,872 bytes). Locking and redeem scripts, and every stack
+// element, keep the MAX_SCRIPT_SIZE limit.
+static constexpr int MAX_PQ_UNLOCKING_SCRIPT_SIZE = 20000;
+
 // Maximum number of values on script interpreter stack + altstack + function table size
 static constexpr int MAX_STACK_SIZE = 1000;
 
