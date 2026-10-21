@@ -258,6 +258,13 @@ add_subdirectory(crypto)
 add_subdirectory(leveldb)
 add_subdirectory(secp256k1)
 add_subdirectory(univalue)
+# XCHAIN: RandomX proof of work (decision D5), vendored from tevador/RandomX v1.2.3; portable build (ARCH=default)
+set(ARCH "default" CACHE STRING "RandomX target architecture")
+add_subdirectory(randomx EXCLUDE_FROM_ALL)
+if(NOT MSVC)
+  # The RandomX JIT assembly lacks a .note.GNU-stack section; without this the node would get an executable stack.
+  target_compile_options(randomx PRIVATE -Wa,--noexecstack)
+endif()
 
 # Enable warnings (after libraries, so we don't generate warnings for those)
 add_c_compiler_flags(-Wnested-externs -Wstrict-prototypes)
@@ -609,6 +616,7 @@ add_library(server
   policy/fees.cpp
   policy/policy.cpp
   pow.cpp
+  pow_randomx.cpp
   rest.cpp
   rpc/blockchain.cpp
   rpc/command.cpp
@@ -645,6 +653,7 @@ target_link_libraries(server
   bitcoinconsensus
   leveldb
   memenv
+  randomx
 )
 
 # std::atomic<PackedState> in chain.h is not lock-free, so GCC needs libatomic.

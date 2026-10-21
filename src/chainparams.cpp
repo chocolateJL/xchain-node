@@ -1360,6 +1360,103 @@ public:
     }
 };
 
+/**
+ * xChain public test network ("xctest").
+ *
+ * Decisions D5 (RandomX), D7 (2-minute blocks, ASERT from genesis), D13 (name, prefix "xctest"), D16 (8 MB block
+ * size floor) and D17 (dust, in policy). All BCH upgrades and the post-quantum rules apply from genesis.
+ *
+ * Proof of work is RandomX (pow_randomx.h): the target keeps BCHN's ASERT limit (< 2^224) and is compared with the
+ * RandomX hash shifted right by 32 bits, so the minimum difficulty is about one RandomX hash. ASERT is anchored at
+ * genesis; the genesis time should be close to the network's start, otherwise the first blocks stay at minimum
+ * difficulty until the chain catches up with the 2-minute schedule (reset the testnet and its genesis if needed).
+ * The half-life (1 hour) is a testnet starting value; the mainnet value is set from testnet measurements (D7).
+ * Subsidy: 50 coins per block, halving every 1,050,000 blocks (about 4 years); the economic model is not final.
+ */
+class CXChainTestParams : public CChainParams {
+public:
+    CXChainTestParams() {
+        strNetworkID = CBaseChainParams::XCTEST;
+        consensus.nSubsidyHalvingInterval = 1'050'000;
+        consensus.BIP16Height = 0;
+        consensus.BIP34Height = 1;
+        consensus.BIP34Hash = BlockHash();
+        consensus.BIP65Height = 1;
+        consensus.BIP66Height = 1;
+        consensus.CSVHeight = 1;
+        consensus.powAlgorithm = Consensus::Params::PowAlgorithm::RANDOMX;
+        consensus.powLimit = uint256S("00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff");
+        consensus.nPowTargetTimespan = 14 * 24 * 60 * 60;
+        consensus.nPowTargetSpacing = 2 * 60;
+        consensus.fPowAllowMinDifficultyBlocks = false;
+        consensus.fPowNoRetargeting = false;
+        consensus.nASERTHalfLife = 60 * 60;
+        consensus.nMinimumChainWork = uint256S("0x00");
+        consensus.defaultAssumeValid = BlockHash();
+
+        consensus.uahfHeight = 0;
+        consensus.daaHeight = 0;
+        consensus.magneticAnomalyHeight = 0;
+        consensus.gravitonHeight = 0;
+        consensus.phononHeight = 0;
+        consensus.axionActivationTime = 0;
+        consensus.upgrade9Height = 0;
+        consensus.upgrade10Height = 0;
+        consensus.upgrade11Height = 0;
+        consensus.upgrade12Height = 0;
+        consensus.pqSigHeight = 0;
+        consensus.upgrade2027ActivationTime = std::numeric_limits<int64_t>::max();
+
+        // Decision D16: 8 MB floor; ABLA still grows the limit with sustained demand.
+        consensus.nDefaultConsensusBlockSize = 8'000'000;
+        consensus.nDefaultGeneratedBlockSizePercent = 50.0;
+        assert(consensus.GetDefaultGeneratedBlockSizeBytes() <= consensus.nDefaultConsensusBlockSize);
+        consensus.ablaConfig = abla::Config::MakeDefault(consensus.nDefaultConsensusBlockSize, /* fixedSize = */ false);
+        assert(abla::State(consensus.ablaConfig, 0).GetBlockSizeLimit() == consensus.nDefaultConsensusBlockSize);
+
+        // Random magic bytes (mainnet has its own); ports 41433 (P2P), 41432 (RPC), 41434 (Tor).
+        diskMagic[0] = 0x60;
+        diskMagic[1] = 0x1d;
+        diskMagic[2] = 0xf0;
+        diskMagic[3] = 0x6c;
+        netMagic[0] = 0xa9;
+        netMagic[1] = 0xd5;
+        netMagic[2] = 0xf6;
+        netMagic[3] = 0x6b;
+        nDefaultPort = 41433;
+        nPruneAfterHeight = 1000;
+        m_assumed_blockchain_size = 1;
+        m_assumed_chain_state_size = 1;
+
+        // Genesis: target at the limit, so nonce 0 meets the RandomX proof (checked in pqsig_tests); its coinbase
+        // output is unspendable (OP_RETURN). Its RandomX seed is all zeros.
+        constexpr uint32_t genesisTime = 1792540800; // 2026-10-21 00:00:00 UTC
+        constexpr uint32_t genesisBits = 0x1d00ffff;
+        genesis = CreateGenesisBlock("xChain testnet 2026-10-21: ML-DSA-44 signatures, RandomX proof of work",
+                                     CScript() << OP_RETURN, genesisTime, 0, genesisBits, 1, 50 * COIN);
+        consensus.hashGenesisBlock = genesis.GetHash();
+        consensus.asertAnchorParams = Consensus::Params::ASERTAnchor{0, genesisBits, genesisTime};
+
+        vFixedSeeds.clear();
+        vSeeds.clear(); // DNS seeds are added when the public testnet starts
+
+        fDefaultConsistencyChecks = false;
+        fRequireStandard = true;
+        m_is_test_chain = true;
+
+        checkpointData = {/* .mapCheckpoints = */ {{0, genesis.GetHash()}}};
+        chainTxData = ChainTxData{0, 0, 0};
+
+        // Base58 is not used for P2PQH; kept at testnet values for the inherited code paths.
+        base58Prefixes[PUBKEY_ADDRESS] = std::vector<uint8_t>(1, 111);
+        base58Prefixes[SCRIPT_ADDRESS] = std::vector<uint8_t>(1, 196);
+        base58Prefixes[SECRET_KEY] = std::vector<uint8_t>(1, 239);
+        base58Prefixes[EXT_PUBLIC_KEY] = {0x04, 0x35, 0x87, 0xCF};
+        base58Prefixes[EXT_SECRET_KEY] = {0x04, 0x35, 0x83, 0x94};
+        cashaddrPrefix = "xctest";
+    }
+};
+
 
 static std::unique_ptr<CChainParams> globalChainParams;
 
@@ -1395,6 +1492,10 @@ std::unique_ptr<CChainParams> CreateChainParams(const std::string &chain) {
 
     if (chain == CBaseChainParams::XCPRIV) {
         return std::make_unique<CXChainPrivParams>();
+    }
+
+    if (chain == CBaseChainParams::XCTEST) {
+        return std::make_unique<CXChainTestParams>();
     }
 
     throw std::runtime_error(

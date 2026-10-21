@@ -123,7 +123,9 @@ static uint32_t GetNextASERTWorkRequired(const CBlockIndex *pindexPrev,
     // as per the absolute formulation of ASERT.
     // This is somewhat counterintuitive since it is referred to as the anchor timestamp, but
     // as per the formula the timestamp of block M-1 must be used if the anchor is M.
-    assert(pindexPrev->pprev != nullptr);
+    // XCHAIN: a chain anchored at genesis (xctest, decision D7) has no block M-1; its anchor parameters carry the
+    // genesis timestamp instead (as the dynamic-anchor path does), so block 1 (pindexPrev == genesis) is allowed.
+    assert(pindexPrev->pprev != nullptr || anchorParams.nHeight == 0);
 
     const arith_uint256 refBlockTarget = arith_uint256().SetCompact(anchorParams.nBits);
 
@@ -414,6 +416,11 @@ bool CheckProofOfWork(const BlockHash &hash, uint32_t nBits,
     if (fNegative || bnTarget == 0 || fOverflow ||
         bnTarget > UintToArith256(params.powLimit)) {
         return false;
+    }
+
+    if (params.powAlgorithm == Consensus::Params::PowAlgorithm::RANDOMX) {
+        // The RandomX proof needs the seed block, so it is checked in ContextualCheckBlockHeader.
+        return true;
     }
 
     // Check proof of work matches claimed amount

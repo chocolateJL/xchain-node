@@ -409,7 +409,7 @@ const std::list<SectionInfo> ArgsManager::GetUnrecognizedSections() const {
     static const std::set<std::string> available_sections{
         CBaseChainParams::REGTEST,
         CBaseChainParams::TESTNET, CBaseChainParams::TESTNET4, CBaseChainParams::SCALENET, CBaseChainParams::CHIPNET,
-        CBaseChainParams::XCPRIV, CBaseChainParams::MAIN};
+        CBaseChainParams::XCPRIV, CBaseChainParams::XCTEST, CBaseChainParams::MAIN};
 
     LOCK(cs_args);
     std::list<SectionInfo> unrecognized = m_config_sections;
@@ -1151,10 +1151,11 @@ std::string ArgsManager::GetChainName() const {
     bool fScaleNet = ArgsManagerHelper::GetNetBoolArg(*this, "-scalenet");
     bool fChipNet = ArgsManagerHelper::GetNetBoolArg(*this, "-chipnet");
     bool fXcPriv = ArgsManagerHelper::GetNetBoolArg(*this, "-xcpriv");
+    bool fXcTest = ArgsManagerHelper::GetNetBoolArg(*this, "-xctest");
 
-    if (fTestNet + fTestNet4 + fScaleNet + fRegTest + fChipNet + fXcPriv > 1) {
+    if (fTestNet + fTestNet4 + fScaleNet + fRegTest + fChipNet + fXcPriv + fXcTest > 1) {
         throw std::runtime_error(
-            "Invalid combination of -regtest, -testnet, -testnet4, -scalenet, -chipnet, and -xcpriv.");
+            "Invalid combination of -regtest, -testnet, -testnet4, -scalenet, -chipnet, -xcpriv and -xctest.");
     }
     if (fRegTest) {
         return CBaseChainParams::REGTEST;
@@ -1173,6 +1174,9 @@ std::string ArgsManager::GetChainName() const {
     }
     if (fXcPriv) {
         return CBaseChainParams::XCPRIV;
+    }
+    if (fXcTest) {
+        return CBaseChainParams::XCTEST;
     }
     return CBaseChainParams::MAIN;
 }

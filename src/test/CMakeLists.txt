@@ -272,6 +272,7 @@ add_boost_unit_tests_to_suite(bitcoin test_bitcoin
     pmt_tests.cpp
     policyestimator_tests.cpp
     pqsig_tests.cpp
+    xctest_tests.cpp
     pow_tests.cpp
     prevector_tests.cpp
     raii_event_tests.cpp

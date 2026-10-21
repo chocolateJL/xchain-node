@@ -32,6 +32,7 @@
 #include <policy/mempool.h>
 #include <policy/policy.h>
 #include <pow.h>
+#include <pow_randomx.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <random.h>
@@ -3691,7 +3692,8 @@ static bool ContextualCheckBlockHeader(const CChainParams &params,
                                        const CBlockHeader &block,
                                        CValidationState &state,
                                        const CBlockIndex *pindexPrev,
-                                       int64_t nAdjustedTime) {
+                                       int64_t nAdjustedTime,
+                                       bool fCheckPoW = true) {
     assert(pindexPrev != nullptr);
     const int nHeight = pindexPrev->nHeight + 1;
 
@@ -3702,6 +3704,12 @@ static bool ContextualCheckBlockHeader(const CChainParams &params,
         LogPrintf("bad bits after height: %d\n", pindexPrev->nHeight);
         return state.DoS(100, false, REJECT_INVALID, "bad-diffbits", false,
                          "incorrect proof of work");
+    }
+
+    // XCHAIN: RandomX proof of work (decision D5); needs the seed block, an ancestor of pindexPrev.
+    if (fCheckPoW && consensusParams.powAlgorithm == Consensus::Params::PowAlgorithm::RANDOMX &&
+        !randomx_pow::CheckHeader(block, pindexPrev, consensusParams)) {
+        return state.DoS(50, false, REJECT_INVALID, "high-hash", false, "RandomX proof of work failed");
     }
 
     // finalizeheaders: Check against last finalized block height
@@ -4284,7 +4292,7 @@ bool TestBlockValidity(CValidationState &state, const CChainParams &params,
 
     // NOTE: CheckBlockHeader is called by CheckBlock
     if (!ContextualCheckBlockHeader(params, block, state, pindexPrev,
-                                    GetAdjustedTime())) {
+                                    GetAdjustedTime(), validationOptions.shouldValidatePoW())) {
         return error("%s: Consensus::ContextualCheckBlockHeader: %s", __func__,
                      FormatStateMessage(state));
     }

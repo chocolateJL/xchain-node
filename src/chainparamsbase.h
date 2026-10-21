@@ -26,6 +26,7 @@ public:
     static const std::string REGTEST;
     /** XCHAIN private development network (W2 demo; post-quantum rules from genesis) */
     static const std::string XCPRIV;
+    static const std::string XCTEST;
 
     const std::string &DataDir() const { return strDataDir; }
     uint16_t RPCPort() const { return m_rpc_port; }

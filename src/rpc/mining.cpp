@@ -21,6 +21,7 @@
 #include <net.h>
 #include <policy/policy.h>
 #include <pow.h>
+#include <pow_randomx.h>
 #include <rpc/blockchain.h>
 #include <rpc/mining.h>
 #include <rpc/server.h>
@@ -155,8 +156,16 @@ UniValue generateBlocks(const Config &config,
 
         IncrementExtraNonce(pblock, pindexMinedTip, config, nExtraNonce);
 
+        const Consensus::Params &consensusParams = config.GetChainParams().GetConsensus();
+        // XCHAIN: on RandomX chains the proof is the RandomX hash under the seed of the block being extended.
+        const bool fRandomX = consensusParams.powAlgorithm == Consensus::Params::PowAlgorithm::RANDOMX;
+        const uint256 rxSeed = fRandomX ? randomx_pow::SeedHash(pindexMinedTip) : uint256();
+        const auto solved = [&] {
+            return fRandomX ? randomx_pow::CheckHash(randomx_pow::Hash(*pblock, rxSeed), pblock->nBits, consensusParams)
+                            : CheckProofOfWork(pblock->GetHash(), pblock->nBits, consensusParams);
+        };
         while (nMaxTries > 0 && pblock->nNonce < std::numeric_limits<uint32_t>::max()
-               && !CheckProofOfWork(pblock->GetHash(), pblock->nBits, config.GetChainParams().GetConsensus())
+               && !solved()
                && !ShutdownRequested()) {
             ++pblock->nNonce;
             --nMaxTries;
@@ -733,6 +742,13 @@ static UniValue getblocktemplatecommon(bool fLight, const Config &config, const 
     result.emplace_back("curtime", pblock->GetBlockTime());
     result.emplace_back("bits", strprintf("%08x", pblock->nBits));
     result.emplace_back("height", pindexPrev->nHeight + 1);
+    if (config.GetChainParams().GetConsensus().powAlgorithm == Consensus::Params::PowAlgorithm::RANDOMX) {
+        // XCHAIN: miners hash the 80-byte header with RandomX under this seed; the RandomX hash shifted right by
+        // rxtargetshift bits must not exceed "target".
+        result.emplace_back("powalgorithm", "randomx");
+        result.emplace_back("rxseedhash", randomx_pow::SeedHash(pindexPrev).GetHex());
+        result.emplace_back("rxtargetshift", int(randomx_pow::TARGET_SHIFT));
+    }
 
     if (fLight) {
         // Note: this must be called with cs_main held (which is the case here)
@@ -836,6 +852,9 @@ static UniValue getblocktemplate(const Config &config, const JSONRPCRequest &req
                 "  \"curtime\" : ttt,                  (numeric) current timestamp in seconds since epoch (Jan 1 1970 GMT)\n"
                 "  \"bits\" : \"xxxxxxxx\",              (string) compressed target of next block\n"
                 "  \"height\" : n                      (numeric) The height of the next block\n"
+                "  \"powalgorithm\" : \"randomx\",        (string, RandomX chains only) proof-of-work algorithm\n"
+                "  \"rxseedhash\" : \"xxxx\",             (string, RandomX chains only) RandomX key of the next block\n"
+                "  \"rxtargetshift\" : n                (numeric, RandomX chains only) RandomX hash >> n must be <= target\n"
                 "}\n"
             },
             RPCExamples{HelpExampleCli("getblocktemplate", "") +

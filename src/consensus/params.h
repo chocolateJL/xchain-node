@@ -84,6 +84,9 @@ struct Params {
     }
 
     /** Proof of work parameters */
+    /** XCHAIN (decision D5): RANDOMX on the xChain networks, see pow_randomx.h; SHA256D elsewhere. */
+    enum class PowAlgorithm : uint8_t { SHA256D, RANDOMX };
+    PowAlgorithm powAlgorithm = PowAlgorithm::SHA256D;
     uint256 powLimit;
     bool fPowAllowMinDifficultyBlocks;
     bool fPowNoRetargeting;

@@ -28,7 +28,10 @@ uint32_t CalculateNextWorkRequired(const CBlockIndex *pindexPrev,
 
 /**
  * Check whether a block hash satisfies the proof-of-work requirement specified
- * by nBits
+ * by nBits.
+ * XCHAIN: on RandomX chains (Consensus::Params::powAlgorithm) the block hash proves nothing, so this only checks
+ * that nBits is a valid target within powLimit; the RandomX hash is checked with the header's context
+ * (randomx_pow::CheckHeader, called from ContextualCheckBlockHeader).
  */
 bool CheckProofOfWork(const BlockHash &hash, uint32_t nBits,
                       const Consensus::Params &params);
