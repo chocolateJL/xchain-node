@@ -52,11 +52,13 @@ bool CheckTransactionSchnorrSignatureEncoding(const ByteView &vchSig, uint32_t f
 bool CheckPubKeyEncoding(const ByteView &vchPubKey, uint32_t flags, ScriptError *serror);
 
 /**
- * Check a non-empty OP_CHECKPQSIG signature element: exact length (raw ML-DSA-44
- * signature + sighash byte) and a valid sighash type. Both checks apply
- * regardless of SCRIPT_VERIFY_STRICTENC (spec/pq-signature.md, section 2).
+ * Check a non-empty OP_CHECKPQSIG signature element: exact length for the algorithm
+ * `vchPubKey` names (raw signature + sighash byte) and a valid sighash type. Both
+ * checks apply regardless of SCRIPT_VERIFY_STRICTENC (spec/pq-signature.md,
+ * section 2). The public key is checked first (CheckPQPubKeyEncoding); an invalid
+ * one fails here too.
  */
-bool CheckPQSignatureEncoding(const ByteView &vchSig, uint32_t flags, ScriptError *serror);
+bool CheckPQSignatureEncoding(const ByteView &vchSig, const ByteView &vchPubKey, uint32_t flags, ScriptError *serror);
 
 /**
  * Check an OP_CHECKPQSIG public key element: exact length and a known algorithm

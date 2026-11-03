@@ -14,23 +14,55 @@
 #include <vector>
 
 /**
- * ML-DSA-44 (FIPS 204) transaction signatures, as used by OP_CHECKPQSIG.
- * See spec/pq-signature.md.
+ * Post-quantum transaction signatures, as used by OP_CHECKPQSIG. ML-DSA-44 (FIPS 204) is the only enabled
+ * algorithm. See spec/pq-signature.md.
  */
 namespace pqsig {
 
-/** Algorithm identifier: first byte of every public key stack element. */
+/** Algorithm identifiers: first byte of every public key stack element. */
 inline constexpr uint8_t ALG_ML_DSA_44 = 0x01;
+/** Reserved identifiers, treated as unknown until a network upgrade enables them (decisions D1, D19). */
+inline constexpr uint8_t ALG_SLH_DSA_RESERVED = 0x02;
+inline constexpr uint8_t ALG_FN_DSA_512_RESERVED = 0x03;
 
-inline constexpr size_t RAW_PUBKEY_SIZE = 1312;
-inline constexpr size_t RAW_SIG_SIZE = 2420;
+/** Sizes of one signature algorithm. Raw sizes exclude the identifier byte and the sighash byte. */
+struct Algorithm {
+    uint8_t id;
+    const char *name;
+    size_t rawPubKeySize;
+    size_t rawSigSize;
+
+    /** Public key stack element: algorithm identifier + raw public key. */
+    constexpr size_t PubKeySize() const { return 1 + rawPubKeySize; }
+    /** Signature stack element: raw signature + sighash type byte. */
+    constexpr size_t SigSize() const { return rawSigSize + 1; }
+};
+
+inline constexpr Algorithm ML_DSA_44{ALG_ML_DSA_44, "ML-DSA-44", 1312, 2420};
+
+/**
+ * The enabled algorithm a public key element names, or nullptr if the identifier is unknown or the element has the
+ * wrong size. Adding an algorithm (FN-DSA-512 under 0x03, D19) means adding it here and in Verify(), gated by the
+ * script flag of the upgrade that enables it.
+ */
+const Algorithm *GetPubKeyAlgorithm(ByteView pubkey);
+
+/**
+ * Serialized size of a transaction input spending a P2PQH output with `alg`: outpoint (36), scriptSig length (3),
+ * the signature and public key pushes (PUSHDATA2, 3 bytes of overhead each, since both elements are 256-65535 bytes)
+ * and sequence (4).
+ */
+constexpr size_t P2PQHInputSize(const Algorithm &alg) {
+    return 36 + 3 + (3 + alg.SigSize()) + (3 + alg.PubKeySize()) + 4;
+}
+
+// ML-DSA-44 sizes: the key generation and signing below, and the wallet default.
+inline constexpr size_t RAW_PUBKEY_SIZE = ML_DSA_44.rawPubKeySize;
+inline constexpr size_t RAW_SIG_SIZE = ML_DSA_44.rawSigSize;
 inline constexpr size_t SECRET_KEY_SIZE = 2560;
 inline constexpr size_t SEED_SIZE = 32;
-
-/** Public key stack element: algorithm identifier + raw ML-DSA-44 public key. */
-inline constexpr size_t PUBKEY_SIZE = 1 + RAW_PUBKEY_SIZE;
-/** Signature stack element: raw ML-DSA-44 signature + sighash type byte. */
-inline constexpr size_t SIG_SIZE = RAW_SIG_SIZE + 1;
+inline constexpr size_t PUBKEY_SIZE = ML_DSA_44.PubKeySize();
+inline constexpr size_t SIG_SIZE = ML_DSA_44.SigSize();
 
 /** FIPS 204 context string; "XCHAIN" from the chain name xChain (decision D13). */
 inline constexpr char CONTEXT[] = "XCHAIN-tx-v1";
@@ -38,13 +70,13 @@ inline constexpr size_t CONTEXT_SIZE = sizeof(CONTEXT) - 1;
 
 using SecretKey = std::vector<uint8_t, secure_allocator<uint8_t>>;
 
-/** True if `pubkey` is exactly PUBKEY_SIZE bytes and starts with a known algorithm identifier. */
+/** True if `pubkey` names an enabled algorithm and has that algorithm's public key element size. */
 bool IsValidPubKeyEncoding(ByteView pubkey);
 
 /**
- * Verify a raw signature (without the sighash byte) over a 32-byte digest.
+ * Verify a raw signature (without the sighash byte) over a 32-byte digest with the algorithm `pubkey` names.
  * `pubkey` is the full stack element including the algorithm identifier.
- * Returns false for any encoding error.
+ * Returns false for any encoding error, including a signature of the wrong size for that algorithm.
  */
 bool Verify(ByteView pubkey, ByteView rawSig, const uint256 &digest);
 

@@ -68,6 +68,8 @@ class CBrokenBlock(CBlock):
 
 class FullBlockTest(BitcoinTestFramework):
     def set_test_params(self):
+        # XCHAIN: builds transactions with secp256k1 (ECDSA / Schnorr) signatures, so it runs the inherited BCH rules
+        self.inherited_bch_rules = True
         self.num_nodes = 1
         self.setup_clean_chain = True
         # This is a consensus block test, we don't care about tx policy

@@ -1500,7 +1500,7 @@ bool EvalScriptImpl(StackT &stack, const CScript &initialScript, uint32_t flags,
 
                             bool fSuccess = false;
                             if (vchSig.size()) {
-                                if (!CheckPQSignatureEncoding(vchSig, flags, serror)) {
+                                if (!CheckPQSignatureEncoding(vchSig, vchPubKey, flags, serror)) {
                                     return false;
                                 }
                                 // Subset of script starting at the most recent codeseparator; no signature removal.
@@ -2665,12 +2665,13 @@ bool TransactionSignatureChecker::CheckSig(const ByteView &vchSigIn, const std::
 bool TransactionSignatureChecker::CheckPQSig(const ByteView &vchSigIn, const ByteView &vchPubKey,
                                              const ByteView &scriptCode, uint32_t flags, size_t *pnBytesHashed) const {
     if (pnBytesHashed) *pnBytesHashed = 0u;
-    if (vchSigIn.size() != pqsig::SIG_SIZE) {
+    const pqsig::Algorithm *alg = pqsig::GetPubKeyAlgorithm(vchPubKey);
+    if (alg == nullptr || vchSigIn.size() != alg->SigSize()) {
         return false;
     }
     // Hash type is the last byte; PQ signatures always use the FORKID (BIP143-style) digest.
     SigHashType const sigHashType = GetHashType(vchSigIn);
-    const ByteView rawSig = vchSigIn.first(pqsig::RAW_SIG_SIZE);
+    const ByteView rawSig = vchSigIn.first(alg->rawSigSize);
 
     const auto & [sighash, bytesHashed] = SignatureHash(scriptCode, context, sigHashType, this->txdata,
                                                         flags | SCRIPT_ENABLE_SIGHASH_FORKID);

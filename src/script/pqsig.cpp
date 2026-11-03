@@ -15,6 +15,7 @@ static_assert(pqsig::RAW_SIG_SIZE == MLDSA_BYTES(44));
 static_assert(pqsig::SECRET_KEY_SIZE == MLDSA_SECRETKEYBYTES(44));
 static_assert(pqsig::SEED_SIZE == MLDSA_SEEDBYTES);
 static_assert(pqsig::CONTEXT_SIZE <= 255, "FIPS 204 context strings are at most 255 bytes");
+static_assert(pqsig::P2PQHInputSize(pqsig::ML_DSA_44) == 3783);
 
 /** Randomness source required by mldsa-native (used for hedged signing only, never for verification). */
 extern "C" int randombytes(uint8_t *out, size_t outlen) {
@@ -34,16 +35,36 @@ static const uint8_t *ContextBytes() {
     return reinterpret_cast<const uint8_t *>(CONTEXT);
 }
 
+const Algorithm *GetPubKeyAlgorithm(ByteView pubkey) {
+    if (pubkey.empty()) {
+        return nullptr;
+    }
+    const Algorithm *alg = nullptr;
+    switch (pubkey[0]) {
+        case ALG_ML_DSA_44:
+            alg = &ML_DSA_44;
+            break;
+        default:
+            return nullptr;
+    }
+    return pubkey.size() == alg->PubKeySize() ? alg : nullptr;
+}
+
 bool IsValidPubKeyEncoding(ByteView pubkey) {
-    return pubkey.size() == PUBKEY_SIZE && pubkey[0] == ALG_ML_DSA_44;
+    return GetPubKeyAlgorithm(pubkey) != nullptr;
 }
 
 bool Verify(ByteView pubkey, ByteView rawSig, const uint256 &digest) {
-    if (!IsValidPubKeyEncoding(pubkey) || rawSig.size() != RAW_SIG_SIZE) {
+    const Algorithm *alg = GetPubKeyAlgorithm(pubkey);
+    if (alg == nullptr || rawSig.size() != alg->rawSigSize) {
         return false;
     }
-    return xc_mldsa44_verify(rawSig.data(), digest.begin(), digest.size(), ContextBytes(), CONTEXT_SIZE,
-                             pubkey.data() + 1) == 0;
+    switch (alg->id) {
+        case ALG_ML_DSA_44:
+            return xc_mldsa44_verify(rawSig.data(), digest.begin(), digest.size(), ContextBytes(), CONTEXT_SIZE,
+                                     pubkey.data() + 1) == 0;
+    }
+    return false;
 }
 
 bool KeyPairFromSeed(const std::array<uint8_t, SEED_SIZE> &seed, std::vector<uint8_t> &pubkey, SecretKey &secret) {

@@ -8,6 +8,7 @@
 
 #include <consensus/consensus.h>
 #include <feerate.h>
+#include <script/pqsig.h>
 #include <script/standard.h>
 
 #include <string>
@@ -147,8 +148,10 @@ static constexpr uint32_t STANDARD_LOCKTIME_VERIFY_FLAGS =
  * XCHAIN (decision D17): with SCRIPT_ENABLE_PQSIG in `flags`, an output is dust when spending it would cost more
  * than it is worth at dustRelayFee: its own size plus one signed P2PQH input (P2PQH_INPUT_SPEND_SIZE bytes),
  * 3,829 satoshis for a P2PQH output at 1 sat/byte. Without the flag, BCH's rule (three times a 148-byte input).
+ * A P2PQH output does not reveal which algorithm will spend it, so the input is sized for the wallet default,
+ * ML-DSA-44.
  */
-static constexpr size_t P2PQH_INPUT_SPEND_SIZE = 32 + 4 + 3 + 3740 + 4;
+static constexpr size_t P2PQH_INPUT_SPEND_SIZE = pqsig::P2PQHInputSize(pqsig::ML_DSA_44);
 Amount GetDustThreshold(const CTxOut &txout, const CFeeRate &dustRelayFee, uint32_t flags = 0);
 
 bool IsDust(const CTxOut &txout, const CFeeRate &dustRelayFee, uint32_t flags = 0);

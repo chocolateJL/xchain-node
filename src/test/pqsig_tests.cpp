@@ -20,6 +20,7 @@
 #include <script/script.h>
 #include <script/script_error.h>
 #include <script/script_execution_context.h>
+#include <script/sigencoding.h>
 #include <script/standard.h>
 #include <univalue.h>
 #include <util/strencodings.h>
@@ -500,6 +501,78 @@ BOOST_AUTO_TEST_CASE(deterministic_signing) {
     BOOST_REQUIRE(pqsig::SignDeterministic(key.secret, digest, b));
     BOOST_CHECK(a == b);
     BOOST_CHECK(pqsig::Verify(key.pubkey, a, digest));
+}
+
+/** Sizes come from the algorithm a public key names; reserved identifiers stay unknown (D19). */
+BOOST_AUTO_TEST_CASE(algorithm_table) {
+    const PQKey key = MakeKey(42);
+    BOOST_CHECK(pqsig::GetPubKeyAlgorithm(key.pubkey) == &pqsig::ML_DSA_44);
+    BOOST_CHECK_EQUAL(P2PQH_INPUT_SPEND_SIZE, 3783u);
+
+    // Unknown or reserved identifiers are rejected at the ML-DSA-44 size and at the FN-DSA-512 size alike.
+    for (const uint8_t id : {pqsig::ALG_SLH_DSA_RESERVED, pqsig::ALG_FN_DSA_512_RESERVED, uint8_t{0x00}, uint8_t{0xff}}) {
+        Bytes pk = key.pubkey;
+        pk[0] = id;
+        BOOST_CHECK(pqsig::GetPubKeyAlgorithm(pk) == nullptr);
+        Bytes fnSized(1 + 897);
+        fnSized[0] = id;
+        BOOST_CHECK(pqsig::GetPubKeyAlgorithm(fnSized) == nullptr);
+    }
+    BOOST_CHECK(pqsig::GetPubKeyAlgorithm(Bytes{}) == nullptr);
+
+    // The signature element size is checked against the key's algorithm.
+    Bytes sig(pqsig::SIG_SIZE);
+    sig.back() = uint8_t(SigHashType().withFork().getRawSigHashType());
+    ScriptError err = ScriptError::OK;
+    BOOST_CHECK(CheckPQSignatureEncoding(sig, key.pubkey, 0, &err));
+    Bytes reserved = key.pubkey;
+    reserved[0] = pqsig::ALG_FN_DSA_512_RESERVED;
+    BOOST_CHECK(!CheckPQSignatureEncoding(sig, reserved, 0, &err));
+    BOOST_CHECK(err == ScriptError::PQ_SIG_ENCODING);
+}
+
+/**
+ * ML-DSA hint encoding (FIPS 204 HintBitUnpack): indices strictly increasing within each polynomial, cumulative
+ * counts non-decreasing and at most omega, unused index slots zero. Some ML-DSA implementations have accepted
+ * reordered or duplicate indices, which lets anyone change a valid signature (and the txid) without the key.
+ * Consensus must reject every such variant.
+ */
+BOOST_AUTO_TEST_CASE(noncanonical_hint_rejected) {
+    // ML-DSA-44: k = 4 polynomials, omega = 80; the hint is the last omega + k bytes of the signature.
+    constexpr size_t K = 4, OMEGA = 80, H = pqsig::RAW_SIG_SIZE - (OMEGA + K);
+    const PQKey key = MakeKey(43);
+
+    // A deterministic signature with at least two hints in one polynomial and a free index slot.
+    Bytes sig;
+    uint256 digest;
+    size_t poly = K;
+    for (int i = 0; poly == K; ++i) {
+        BOOST_REQUIRE(i < 256);
+        digest = Hash(Bytes{0x48, uint8_t(i)});
+        BOOST_REQUIRE(pqsig::SignDeterministic(key.secret, digest, sig));
+        const uint8_t *counts = &sig[H + OMEGA];
+        for (size_t p = 0; p < K && counts[K - 1] < OMEGA; ++p) {
+            if (counts[p] >= (p == 0 ? 0 : counts[p - 1]) + 2) {
+                poly = p;
+                break;
+            }
+        }
+    }
+    BOOST_REQUIRE(pqsig::Verify(key.pubkey, sig, digest));
+    const size_t first = H + (poly == 0 ? 0 : sig[H + OMEGA + poly - 1]);
+    const size_t used = sig[H + OMEGA + K - 1];
+
+    const auto rejected = [&](const char *what, const auto &mutate) {
+        Bytes bad = sig;
+        mutate(bad);
+        BOOST_REQUIRE_MESSAGE(bad != sig, what);
+        BOOST_CHECK_MESSAGE(!pqsig::Verify(key.pubkey, bad, digest), what);
+    };
+    rejected("two hint indices swapped", [&](Bytes &s) { std::swap(s[first], s[first + 1]); });
+    rejected("duplicate hint index", [&](Bytes &s) { s[first + 1] = s[first]; });
+    rejected("nonzero unused index slot", [&](Bytes &s) { s[H + used] = 1; });
+    rejected("count above omega", [&](Bytes &s) { s[H + OMEGA + K - 1] = OMEGA + 1; });
+    rejected("decreasing counts", [&](Bytes &s) { s[H + OMEGA + K - 2] = uint8_t(used + 1); });
 }
 
 /**

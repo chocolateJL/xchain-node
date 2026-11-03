@@ -44,19 +44,24 @@ void test_one_input(Span<const uint8_t> buffer) {
     assert(CheckPQPubKeyEncoding(pubkey, &err) == pubkeyOk);
     assert(pubkeyOk || err == ScriptError::PQ_PUBKEY_ENCODING);
 
-    // Signature element: exactly 2,421 bytes; the verdict depends only on the sighash byte and
-    // never on the STRICTENC / FORKID flags, which are forced for PQ signatures.
+    // Signature element, checked against a well-formed ML-DSA-44 key: exactly 2,421 bytes; the
+    // verdict depends only on the sighash byte and never on the STRICTENC / FORKID flags, which
+    // are forced for PQ signatures.
+    std::vector<uint8_t> mldsaPubkey(pqsig::PUBKEY_SIZE);
+    mldsaPubkey[0] = pqsig::ALG_ML_DSA_44;
     err = ScriptError::OK;
-    const bool sigOk = CheckPQSignatureEncoding(sig, flags, &err);
+    const bool sigOk = CheckPQSignatureEncoding(sig, mldsaPubkey, flags, &err);
+    // The expected size comes from the key's algorithm, so a malformed key fails the signature too.
+    assert(CheckPQSignatureEncoding(sig, pubkey, flags, nullptr) == (sigOk && pubkeyOk));
     if (sig.size() != pqsig::SIG_SIZE) {
         assert(!sigOk && err == ScriptError::PQ_SIG_ENCODING);
     } else {
         const uint32_t forced = SCRIPT_VERIFY_STRICTENC | SCRIPT_ENABLE_SIGHASH_FORKID;
-        assert(CheckPQSignatureEncoding(sig, flags & ~forced, nullptr) == sigOk);
-        assert(CheckPQSignatureEncoding(sig, flags | forced, nullptr) == sigOk);
+        assert(CheckPQSignatureEncoding(sig, mldsaPubkey, flags & ~forced, nullptr) == sigOk);
+        assert(CheckPQSignatureEncoding(sig, mldsaPubkey, flags | forced, nullptr) == sigOk);
         std::vector<uint8_t> other = sig;
         other[fdp.ConsumeIntegralInRange<size_t>(0, pqsig::RAW_SIG_SIZE - 1)] ^= fdp.ConsumeIntegral<uint8_t>();
-        assert(CheckPQSignatureEncoding(other, flags, nullptr) == sigOk);
+        assert(CheckPQSignatureEncoding(other, mldsaPubkey, flags, nullptr) == sigOk);
         if (sigOk) {
             const SigHashType type = GetHashType(sig);
             assert(type.hasFork() && type.isDefined());

@@ -295,8 +295,9 @@ bool CheckPubKeyEncoding(const ByteView &vchPubKey, uint32_t flags, ScriptError 
     return true;
 }
 
-bool CheckPQSignatureEncoding(const ByteView &vchSig, uint32_t flags, ScriptError *serror) {
-    if (vchSig.size() != pqsig::SIG_SIZE) {
+bool CheckPQSignatureEncoding(const ByteView &vchSig, const ByteView &vchPubKey, uint32_t flags, ScriptError *serror) {
+    const pqsig::Algorithm *alg = pqsig::GetPubKeyAlgorithm(vchPubKey);
+    if (alg == nullptr || vchSig.size() != alg->SigSize()) {
         return set_error(serror, ScriptError::PQ_SIG_ENCODING);
     }
     // Sighash type rules are consensus for PQ signatures, and they always use the
