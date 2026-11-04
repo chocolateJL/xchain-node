@@ -907,6 +907,10 @@ public:
 
     // Last time a "MEMPOOL" request was serviced.
     std::atomic<int64_t> timeLastMempoolReq{0};
+    // Highest mempool entry id among the transactions we have announced to this peer. A getdata for a transaction
+    // still in our mempool is answered only if its entry id is not above this, so that the peer cannot probe our
+    // mempool for transactions that we have not (yet) offered to it.
+    std::atomic<uint64_t> lastInvEntryId{0};
 
     // Block and TXN accept times
     std::atomic<int64_t> nLastBlockTime{0};

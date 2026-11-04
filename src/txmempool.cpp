@@ -117,7 +117,8 @@ void CTxMemPool::UpdateChildrenForRemoval(txiter it) {
     }
 }
 
-void CTxMemPool::UpdateForRemoveFromMempool(const setEntries &entriesToRemove) {
+template <typename Entries>
+void CTxMemPool::UpdateForRemoveFromMempool(const Entries &entriesToRemove) {
     for (txiter removeIt : entriesToRemove) {
         // Note that UpdateParentsOf severs the child links that point to
         // removeIt in the mapLinks entries for the parents of removeIt.
@@ -321,30 +322,45 @@ void CTxMemPool::removeForBlock(const std::vector<CTransactionRef> &vtx) {
         return;
     }
 
-    DisconnectedBlockTransactions disconnectpool;
-    disconnectpool.addNoLimit(vtx);
-
-    // iterate in topological order (parents before children)
-    for (const CTransactionRef &tx : reverse_iterate(disconnectpool.GetQueuedTx().get<insertion_order>())) {
-        const txiter it = mapTx.find(tx->GetId());
-        if (it != mapTx.end()) {
-            setEntries stage;
-            stage.insert(it);
-            RemoveStaged(stage, MemPoolRemovalReason::BLOCK);
+    // Remove all of the block's in-mempool txns as one batch. RemoveStaged updates the links of the whole batch
+    // before erasing any of it, so the batch needs no topological sort; we still remove (and notify) in entry-id
+    // order, which is mempool acceptance order and therefore topological. Every in-mempool parent of a block txn is
+    // in the block too, since a valid block cannot spend an unconfirmed output from outside itself.
+    // A sorted vector rather than a setEntries: with ~100k txns per block, inserting into a set (each comparison
+    // dereferences two entries) costs more than all the link updates.
+    std::vector<std::pair<uint64_t, txiter>> found;
+    found.reserve(vtx.size());
+    std::vector<const CTransaction *> notInPool;
+    for (const CTransactionRef &tx : vtx) {
+        if (const txiter it = mapTx.find(tx->GetId()); it != mapTx.end()) {
+            found.emplace_back(it->GetEntryId(), it);
         } else {
-            removeConflicts(*tx);
+            notInPool.push_back(tx.get());
         }
     }
-    // clear prioritisations (mapDeltas); optmized for the common case where
-    // mapDeltas is empty or much smaller than block.vtx
-    algo::erase_if(mapDeltas, [&disconnectpool](const auto &kv) {
-        return algo::contains(disconnectpool.GetQueuedTx(), kv.first);
-    });
+    std::sort(found.begin(), found.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+    std::vector<txiter> stage;
+    stage.reserve(found.size());
+    for (const auto &[entryId, it] : found) {
+        stage.push_back(it);
+    }
+    found = {};
+    RemoveStaged(stage, MemPoolRemovalReason::BLOCK);
+
+    // Block txns that were not in the mempool may conflict with mempool txns; those and their descendants go.
+    for (const CTransaction *tx : notInPool) {
+        removeConflicts(*tx);
+    }
+
+    // clear prioritisations (mapDeltas); optimized for the common case where mapDeltas is empty
+    if (!mapDeltas.empty()) {
+        for (const CTransactionRef &tx : vtx) {
+            mapDeltas.erase(tx->GetId());
+        }
+    }
 
     lastRollingFeeUpdate = GetTime();
     blockSinceLastRollingFeeBump = true;
-
-    disconnectpool.clear();
 }
 
 void CTxMemPool::_clear(bool clearDspOrphans /*= true*/) {
@@ -653,7 +669,8 @@ size_t CTxMemPool::DynamicMemoryUsage() const {
            cachedInnerUsage;
 }
 
-void CTxMemPool::RemoveStaged(const setEntries &stage, MemPoolRemovalReason reason) {
+template <typename Entries>
+void CTxMemPool::RemoveStaged(const Entries &stage, MemPoolRemovalReason reason) {
     AssertLockHeld(cs);
     UpdateForRemoveFromMempool(stage);
     for (txiter it : stage) {

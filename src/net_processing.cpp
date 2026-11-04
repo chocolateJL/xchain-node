@@ -189,16 +189,6 @@ int g_outbound_peers_with_protect_from_disconnect GUARDED_BY(cs_main) = 0;
 /** When our tip was last updated. */
 std::atomic<int64_t> g_last_tip_update(0);
 
-/** Relay map. */
-typedef std::map<uint256, CTransactionRef> MapRelay;
-MapRelay mapRelay GUARDED_BY(cs_main);
-/**
- * Expiration-time ordered list of (expire time, relay map entry) pairs,
- * protected by cs_main).
- */
-std::deque<std::pair<int64_t, MapRelay::iterator>>
-    vRelayExpiration GUARDED_BY(cs_main);
-
 // Used only to inform the wallet of when we last received a block
 std::atomic<int64_t> nTimeBestReceived(0);
 
@@ -1475,6 +1465,29 @@ void PeerLogicValidation::ProcessGetBlockData(const Config &config, const NodeRe
     }
 }
 
+CTransactionRef PeerLogicValidation::FindTxForGetData(const CNode &peer, const TxId &txid) const {
+    if (const auto txinfo = g_mempool.info(txid); txinfo.tx) {
+        // To protect privacy, answer from the mempool only for a transaction that we have offered to this peer:
+        // announced to it (or announced a later one), or included in our reply to its MEMPOOL request.
+        const bool offered = txinfo.entryId <= peer.lastInvEntryId ||
+                             (peer.timeLastMempoolReq && txinfo.nTime <= peer.timeLastMempoolReq);
+        return offered ? txinfo.tx : CTransactionRef{};
+    }
+
+    // Not in the mempool: it may have been mined in the most recent block, whose contents are public. After the
+    // coinbase, block transactions are in canonical (txid) order; for a block without that order the search may miss,
+    // which only means the peer gets a notfound.
+    const auto block = WITH_LOCK(cs_most_recent_block, return m_most_recent_block.block);
+    if (block && block->vtx.size() > 1) {
+        const auto it = std::lower_bound(block->vtx.begin() + 1, block->vtx.end(), txid,
+                                         [](const CTransactionRef &tx, const TxId &id) { return tx->GetId() < id; });
+        if (it != block->vtx.end() && (*it)->GetId() == txid) {
+            return *it;
+        }
+    }
+    return {};
+}
+
 void PeerLogicValidation::ProcessGetData(const Config &config, const NodeRef &pfrom,
                                          const std::atomic<bool> &interruptMsgProc) const LOCKS_EXCLUDED(cs_main) {
     AssertLockNotHeld(cs_main);
@@ -1499,19 +1512,9 @@ void PeerLogicValidation::ProcessGetData(const Config &config, const NodeRef &pf
 
             switch (inv.type) {
                 case MSG_TX:
-                    // Send stream from relay memory
-                    if (auto mi = mapRelay.find(inv.hash); mi != mapRelay.end()) {
-                        connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *mi->second));
+                    if (const CTransactionRef tx = FindTxForGetData(*pfrom, TxId(inv.hash))) {
+                        connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *tx));
                         found = true;
-                    } else if (pfrom->timeLastMempoolReq) {
-                        auto txinfo = g_mempool.info(TxId(inv.hash));
-                        // To protect privacy, do not answer getdata using the mempool
-                        // when that TX couldn't have been INVed in reply to a MEMPOOL
-                        // request.
-                        if (txinfo.tx && txinfo.nTime <= pfrom->timeLastMempoolReq) {
-                            connman->PushMessage(pfrom, msgMaker.Make(nSendFlags, NetMsgType::TX, *txinfo.tx));
-                            found = true;
-                        }
                     }
                     break;
                 case MSG_DOUBLESPENDPROOF:
@@ -4627,18 +4630,8 @@ bool PeerLogicValidation::SendMessages(const Config &config, NodeRef pto,
                 // Send
                 vInv.emplace_back(MSG_TX, txid);
                 ++nRelayedTransactions;
-                {
-                    // Expire old relay messages
-                    while (!vRelayExpiration.empty() &&
-                           vRelayExpiration.front().first < nNow) {
-                        mapRelay.erase(vRelayExpiration.front().second);
-                        vRelayExpiration.pop_front();
-                    }
-
-                    auto ret = mapRelay.emplace(txid, txinfo.tx);
-                    if (ret.second) {
-                        vRelayExpiration.emplace_back(nNow + 15 * 60 * 1000000, ret.first);
-                    }
+                if (txinfo.entryId > pto->lastInvEntryId) {
+                    pto->lastInvEntryId = txinfo.entryId;
                 }
                 if (vInv.size() == MAX_INV_SZ) {
                     connman->PushMessage(pto, msgMaker.Make(NetMsgType::INV, std::move(vInv)));

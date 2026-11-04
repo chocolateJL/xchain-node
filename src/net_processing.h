@@ -127,6 +127,14 @@ class PeerLogicValidation final : public CValidationInterface, public NetEventsI
      */
     void ProcessGetData(const Config &config, const NodeRef &pfrom,
                         const std::atomic<bool> &interruptMsgProc) const LOCKS_EXCLUDED(cs_main);
+    /**
+     * Find a transaction to answer a peer's getdata: from the mempool if we have offered it to the peer, otherwise
+     * from the most recent block (it may have been mined since we announced it). Returns null if not found.
+     *
+     * This replaces the old relay map, which kept every relayed transaction for 15 minutes; with large blocks that
+     * map held several GB of transactions that were already mined.
+     */
+    CTransactionRef FindTxForGetData(const CNode &peer, const TxId &txid) const;
 
     void SendBlockTransactions(const CBlock &block, const BlockTransactionsRequest &req, const NodeRef &pfrom) const;
     bool ProcessHeadersMessage(const Config &config, const NodeRef &pfrom, const std::vector<CBlockHeader> &headers,

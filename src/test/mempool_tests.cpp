@@ -107,6 +107,96 @@ BOOST_AUTO_TEST_CASE(MempoolRemoveTest) {
     BOOST_CHECK_EQUAL(testPool.size(), 0UL);
 }
 
+BOOST_AUTO_TEST_CASE(MempoolRemoveForBlockTest) {
+    // removeForBlock removes a block's in-mempool txns as one batch: check that it leaves the links of the
+    // remaining txns consistent, removes conflicts, and notifies in topological order even though the block is in
+    // txid order.
+    TestMemPoolEntryHelper entry;
+    auto makeTx = [](const std::vector<COutPoint> &prevouts, size_t nOut) {
+        CMutableTransaction tx;
+        for (const auto &prevout : prevouts) {
+            tx.vin.emplace_back(prevout, CScript() << OP_11);
+        }
+        tx.vout.resize(nOut);
+        for (auto &out : tx.vout) {
+            out.scriptPubKey = CScript() << OP_11 << OP_EQUAL;
+            out.nValue = 10000 * SATOSHI;
+        }
+        return MakeTransactionRef(tx);
+    };
+
+    // parent -> child[i] -> grandChild[i], for i = 0..2
+    const auto parent = makeTx({COutPoint(TxId(InsecureRand256()), 0)}, 3);
+    std::vector<CTransactionRef> child, grandChild;
+    for (uint32_t i = 0; i < 3; ++i) {
+        child.push_back(makeTx({COutPoint(parent->GetId(), i)}, 1));
+        grandChild.push_back(makeTx({COutPoint(child[i]->GetId(), 0)}, 1));
+    }
+    const auto other = makeTx({COutPoint(TxId(InsecureRand256()), 0)}, 1);
+    // a mempool txn (with a child) that conflicts with a block txn which is not in the mempool
+    const COutPoint contested(TxId(InsecureRand256()), 0);
+    const auto loser = makeTx({contested}, 1);
+    const auto loserChild = makeTx({COutPoint(loser->GetId(), 0)}, 1);
+    const auto winner = makeTx({contested}, 2);
+
+    CTxMemPool testPool;
+    LOCK2(cs_main, testPool.cs);
+    for (const auto &tx : {parent, child[0], grandChild[0], child[1], grandChild[1], child[2], grandChild[2], other,
+                           loser, loserChild}) {
+        testPool.addUnchecked(entry.FromTx(tx));
+    }
+
+    std::vector<CTransactionRef> removedForBlock;
+    size_t removedForConflict = 0;
+    const boost::signals2::scoped_connection conn = testPool.NotifyEntryRemoved.connect(
+        [&](CTransactionRef tx, MemPoolRemovalReason reason) {
+            if (reason == MemPoolRemovalReason::BLOCK) {
+                removedForBlock.push_back(tx);
+            } else if (reason == MemPoolRemovalReason::CONFLICT) {
+                ++removedForConflict;
+            }
+        });
+
+    std::vector<CTransactionRef> vtx{parent, child[0], grandChild[0], child[1], winner};
+    std::sort(vtx.begin(), vtx.end(), [](const auto &a, const auto &b) { return a->GetId() < b->GetId(); });
+    testPool.removeForBlock(vtx);
+
+    // what is left: grandChild[1] (its parent was mined), child[2] -> grandChild[2], other
+    BOOST_CHECK_EQUAL(testPool.size(), 4U);
+    for (const auto &tx : {parent, child[0], grandChild[0], child[1], loser, loserChild}) {
+        BOOST_CHECK(!testPool.exists(tx->GetId()));
+    }
+    BOOST_CHECK_EQUAL(removedForBlock.size(), 4U);
+    BOOST_CHECK_EQUAL(removedForConflict, 2U);
+    auto removedAt = [&](const CTransactionRef &tx) {
+        return std::find(removedForBlock.begin(), removedForBlock.end(), tx) - removedForBlock.begin();
+    };
+    BOOST_CHECK_LT(removedAt(parent), removedAt(child[0]));
+    BOOST_CHECK_LT(removedAt(parent), removedAt(child[1]));
+    BOOST_CHECK_LT(removedAt(child[0]), removedAt(grandChild[0]));
+
+    const auto itGrandChild1 = testPool.GetIter(grandChild[1]->GetId());
+    const auto itChild2 = testPool.GetIter(child[2]->GetId());
+    const auto itGrandChild2 = testPool.GetIter(grandChild[2]->GetId());
+    BOOST_REQUIRE(itGrandChild1 && itChild2 && itGrandChild2);
+    BOOST_CHECK(testPool.GetMemPoolParents(*itGrandChild1).empty());
+    BOOST_CHECK(testPool.GetMemPoolParents(*itChild2).empty());
+    BOOST_CHECK(testPool.GetMemPoolChildren(*itChild2) == CTxMemPool::setEntries{*itGrandChild2});
+    BOOST_CHECK(testPool.GetMemPoolParents(*itGrandChild2) == CTxMemPool::setEntries{*itChild2});
+
+    // outputs spent by mined txns are no longer marked as spent; those spent by remaining txns still are
+    BOOST_CHECK(!testPool.isSpent(COutPoint(parent->GetId(), 0)));
+    BOOST_CHECK(!testPool.isSpent(COutPoint(parent->GetId(), 1)));
+    BOOST_CHECK(testPool.isSpent(COutPoint(parent->GetId(), 2)));
+    BOOST_CHECK(testPool.isSpent(COutPoint(child[1]->GetId(), 0)));
+    BOOST_CHECK(!testPool.isSpent(contested));
+    uint64_t remainingSize = 0;
+    for (const auto &tx : {grandChild[1], child[2], grandChild[2], other}) {
+        remainingSize += (*testPool.GetIter(tx->GetId()))->GetTxSize();
+    }
+    BOOST_CHECK_EQUAL(testPool.GetTotalTxSize(), remainingSize);
+}
+
 BOOST_AUTO_TEST_CASE(MempoolClearTest) {
     // Test CTxMemPool::clear functionality
 

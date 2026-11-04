@@ -599,9 +599,11 @@ public:
      * Remove a set of transactions from the mempool. If a transaction is in
      * this set, then all in-mempool descendants must also be in the set, unless
      * this transaction is being removed for being in a block.
+     * `Entries` is any range of txiter (setEntries, or a std::vector<txiter> of distinct entries); entries are
+     * removed in the range's order.
      */
-    void
-    RemoveStaged(const setEntries &stage, MemPoolRemovalReason reason = MemPoolRemovalReason::UNKNOWN)
+    template <typename Entries>
+    void RemoveStaged(const Entries &stage, MemPoolRemovalReason reason = MemPoolRemovalReason::UNKNOWN)
         EXCLUSIVE_LOCKS_REQUIRED(cs);
 
     /**
@@ -702,7 +704,8 @@ private:
      * For each transaction being removed, sever links between parents
      * and children in mapLinks
      */
-    void UpdateForRemoveFromMempool(const setEntries &entriesToRemove)
+    template <typename Entries>
+    void UpdateForRemoveFromMempool(const Entries &entriesToRemove)
         EXCLUSIVE_LOCKS_REQUIRED(cs);
     /** Sever link between specified transaction and direct children. */
     void UpdateChildrenForRemoval(txiter entry) EXCLUSIVE_LOCKS_REQUIRED(cs);
