@@ -7,6 +7,7 @@
 #include <arith_uint256.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <consensus/abla.h>
 #include <consensus/activation.h>
 #include <pow.h>
 #include <pow_randomx.h>
@@ -130,6 +131,47 @@ BOOST_AUTO_TEST_CASE(xctest_params) {
     CBlockIndex genesisIndex(genesis);
     genesisIndex.nHeight = 0;
     BOOST_CHECK(IsPQSigEnabled(consensus, &genesisIndex));
+}
+
+BOOST_AUTO_TEST_CASE(xcscale_params) {
+    const auto params = CreateChainParams(CBaseChainParams::XCSCALE);
+    const auto test = CreateChainParams(CBaseChainParams::XCTEST);
+    const Consensus::Params &consensus = params->GetConsensus();
+    BOOST_CHECK_EQUAL(params->NetworkIDString(), "xcscale");
+    BOOST_CHECK_EQUAL(params->CashAddrPrefix(), "xcscale");
+    BOOST_CHECK_EQUAL(params->GetDefaultPort(), 41533);
+
+    // A full block holds 1,000 P2PQH transfers (3,885 bytes) per second of 2-minute blocks, and miners fill it.
+    BOOST_CHECK_EQUAL(consensus.nDefaultConsensusBlockSize, 512'000'000u);
+    BOOST_CHECK_GE(consensus.nDefaultConsensusBlockSize, 1'000u * 120 * 3'885);
+    BOOST_CHECK_EQUAL(consensus.GetDefaultGeneratedBlockSizeBytes(), consensus.nDefaultConsensusBlockSize);
+    BOOST_CHECK_EQUAL(abla::State(consensus.ablaConfig, 0).GetBlockSizeLimit(), 512'000'000u);
+
+    // Otherwise the same consensus as xctest.
+    const Consensus::Params &xctest = test->GetConsensus();
+    BOOST_CHECK(consensus.powAlgorithm == Consensus::Params::PowAlgorithm::RANDOMX);
+    BOOST_CHECK_EQUAL(consensus.nPowTargetSpacing, xctest.nPowTargetSpacing);
+    BOOST_CHECK_EQUAL(consensus.nASERTHalfLife, xctest.nASERTHalfLife);
+    BOOST_CHECK_EQUAL(consensus.pqSigHeight, 0);
+    BOOST_CHECK(consensus.powLimit == xctest.powLimit);
+    BOOST_REQUIRE(consensus.asertAnchorParams);
+    BOOST_CHECK_EQUAL(consensus.asertAnchorParams->nHeight, 0);
+    BOOST_CHECK_EQUAL(consensus.asertAnchorParams->nPrevBlockTime, params->GenesisBlock().nTime);
+    BOOST_CHECK(consensus.hashGenesisBlock == params->GenesisBlock().GetHash());
+
+    for (const auto &other : {CBaseChainParams::MAIN, CBaseChainParams::TESTNET, CBaseChainParams::SCALENET,
+                              CBaseChainParams::REGTEST, CBaseChainParams::CHIPNET, CBaseChainParams::XCPRIV,
+                              CBaseChainParams::XCTEST}) {
+        const auto p = CreateChainParams(other);
+        BOOST_CHECK(std::memcmp(p->NetMagic().data(), params->NetMagic().data(), 4) != 0);
+        BOOST_CHECK(std::memcmp(p->DiskMagic().data(), params->DiskMagic().data(), 4) != 0);
+        BOOST_CHECK(p->GetDefaultPort() != params->GetDefaultPort());
+        BOOST_CHECK(p->GenesisBlock().GetHash() != params->GenesisBlock().GetHash());
+    }
+
+    const CBlock &genesis = params->GenesisBlock();
+    BOOST_CHECK(randomx_pow::CheckHash(randomx_pow::Hash(genesis, uint256()), genesis.nBits, consensus));
+    BOOST_TEST_MESSAGE("xcscale genesis " << genesis.GetHash().ToString());
 }
 
 BOOST_AUTO_TEST_CASE(asert_from_genesis) {

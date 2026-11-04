@@ -1457,6 +1457,51 @@ public:
     }
 };
 
+/**
+ * xChain scaling test network ("xcscale"), modelled on BCH scalenet.
+ *
+ * Same consensus as xctest (RandomX, 2-minute blocks, ASERT from genesis, PQ rules from genesis) with a 512 MB block
+ * size floor, so a full block holds about 1,000 P2PQH transfers per second (466 MB per 2-minute block) without waiting
+ * for ABLA to grow, and miners fill the whole limit by default. Used to show that a node keeps up with 1,000
+ * transactions per second before mainnet, and to calibrate ABLA (D20). The chain is disposable: reset it (new genesis)
+ * whenever it gets too large.
+ */
+class CXChainScaleParams : public CXChainTestParams {
+public:
+    CXChainScaleParams() {
+        strNetworkID = CBaseChainParams::XCSCALE;
+
+        consensus.nDefaultConsensusBlockSize = 512'000'000;
+        consensus.nDefaultGeneratedBlockSizePercent = 100.0;
+        assert(consensus.GetDefaultGeneratedBlockSizeBytes() <= consensus.nDefaultConsensusBlockSize);
+        consensus.ablaConfig = abla::Config::MakeDefault(consensus.nDefaultConsensusBlockSize, /* fixedSize = */ false);
+        assert(abla::State(consensus.ablaConfig, 0).GetBlockSizeLimit() == consensus.nDefaultConsensusBlockSize);
+
+        // Random magic bytes; ports 41533 (P2P), 41532 (RPC), 41534 (Tor).
+        diskMagic[0] = 0x3e;
+        diskMagic[1] = 0x8b;
+        diskMagic[2] = 0x27;
+        diskMagic[3] = 0xd1;
+        netMagic[0] = 0xc4;
+        netMagic[1] = 0x71;
+        netMagic[2] = 0x5a;
+        netMagic[3] = 0x9e;
+        nDefaultPort = 41533;
+        m_assumed_blockchain_size = 300;
+        m_assumed_chain_state_size = 2;
+
+        constexpr uint32_t genesisTime = 1793664000; // 2026-11-03 00:00:00 UTC
+        constexpr uint32_t genesisBits = 0x1d00ffff;
+        genesis = CreateGenesisBlock("xChain scaling testnet 2026-11-03: 512 MB blocks, ML-DSA-44, RandomX",
+                                     CScript() << OP_RETURN, genesisTime, 0, genesisBits, 1, 50 * COIN);
+        consensus.hashGenesisBlock = genesis.GetHash();
+        consensus.asertAnchorParams = Consensus::Params::ASERTAnchor{0, genesisBits, genesisTime};
+        checkpointData = {/* .mapCheckpoints = */ {{0, genesis.GetHash()}}};
+
+        cashaddrPrefix = "xcscale";
+    }
+};
+
 
 static std::unique_ptr<CChainParams> globalChainParams;
 
@@ -1496,6 +1541,10 @@ std::unique_ptr<CChainParams> CreateChainParams(const std::string &chain) {
 
     if (chain == CBaseChainParams::XCTEST) {
         return std::make_unique<CXChainTestParams>();
+    }
+
+    if (chain == CBaseChainParams::XCSCALE) {
+        return std::make_unique<CXChainScaleParams>();
     }
 
     throw std::runtime_error(

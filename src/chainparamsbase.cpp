@@ -20,6 +20,7 @@ const std::string CBaseChainParams::CHIPNET = "chip";
 const std::string CBaseChainParams::REGTEST = "regtest";
 const std::string CBaseChainParams::XCPRIV = "xcpriv";
 const std::string CBaseChainParams::XCTEST = "xctest";
+const std::string CBaseChainParams::XCSCALE = "xcscale";
 
 void SetupChainParamsBaseOptions() {
     gArgs.AddArg("-regtest",
@@ -38,6 +39,8 @@ void SetupChainParamsBaseOptions() {
     gArgs.AddArg("-xcpriv", "Use the XCHAIN private development chain (post-quantum signatures only)",
                  ArgsManager::ALLOW_ANY, OptionsCategory::CHAINPARAMS);
     gArgs.AddArg("-xctest", "Use the xChain public test network (post-quantum signatures, RandomX proof of work)",
+                 ArgsManager::ALLOW_ANY, OptionsCategory::CHAINPARAMS);
+    gArgs.AddArg("-xcscale", "Use the xChain scaling test network (as -xctest, with a 512 MB block size floor)",
                  ArgsManager::ALLOW_ANY, OptionsCategory::CHAINPARAMS);
 }
 
@@ -83,6 +86,10 @@ std::unique_ptr<CBaseChainParams> CreateBaseChainParams(const std::string &chain
 
     if (chain == CBaseChainParams::XCTEST) {
         return std::make_unique<CBaseChainParams>("xctest", 41432, 41434);
+    }
+
+    if (chain == CBaseChainParams::XCSCALE) {
+        return std::make_unique<CBaseChainParams>("xcscale", 41532, 41534);
     }
 
     throw std::runtime_error(
