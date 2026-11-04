@@ -654,6 +654,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         """Skip the running test if wallet has not been compiled."""
         if not self.is_wallet_compiled():
             raise SkipTest("wallet has not been compiled.")
+        # XCHAIN: the node wallet signs only with secp256k1 keys, so wallet tests run under the inherited BCH rules.
+        self.inherited_bch_rules = True
 
     def skip_if_no_cli(self):
         """Skip the running test if bitcoin-cli has not been compiled."""

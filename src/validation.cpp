@@ -4169,6 +4169,7 @@ bool CChainState::AcceptBlock(const Config &config,
 
     const CChainParams &chainparams = config.GetChainParams();
     const Consensus::Params &consensusParams = chainparams.GetConsensus();
+    const int64_t nTimeStart = GetTimeMicros();
     uint64_t blockSize{};
     if (!CheckBlock(block, state, consensusParams, BlockValidationOptions(config), &blockSize) ||
         !ContextualCheckBlock(block, state, consensusParams, pindex->pprev)) {
@@ -4200,9 +4201,11 @@ bool CChainState::AcceptBlock(const Config &config,
     // Header is valid/has work and the merkle tree is good.
     // Relay now, but if it does not build on our best tip, let the
     // SendMessages loop relay it.
+    const int64_t nTimeChecked = GetTimeMicros();
     if (!IsInitialBlockDownload() && m_chain.Tip() == pindex->pprev) {
         GetMainSignals().NewPoWValidBlock(pindex, pblock, blockSize);
     }
+    const int64_t nTimeAnnounced = GetTimeMicros();
 
     // Write block to history file
     if (fNewBlock) {
@@ -4222,10 +4225,14 @@ bool CChainState::AcceptBlock(const Config &config,
     } catch (const std::runtime_error &e) {
         return AbortNode(state, std::string("System error: ") + e.what());
     }
+    const int64_t nTimeSaved = GetTimeMicros();
 
     FlushStateToDisk(chainparams, state, FlushStateMode::NONE);
 
     CheckBlockIndex(consensusParams);
+    LogPrint(BCLog::BENCH, "AcceptBlock: checks %.2fms, NewPoWValidBlock %.2fms, save %.2fms, flush %.2fms\n",
+             0.001 * (nTimeChecked - nTimeStart), 0.001 * (nTimeAnnounced - nTimeChecked),
+             0.001 * (nTimeSaved - nTimeAnnounced), 0.001 * (GetTimeMicros() - nTimeSaved));
 
     return true;
 }
@@ -4242,22 +4249,28 @@ bool ProcessNewBlock(const Config &config,
 
         CValidationState state;
 
+        const int64_t nTimeStart = GetTimeMicros();
         // CheckBlock() does not support multi-threaded block validation
         // because CBlock::fChecked can cause data race.
         // Therefore, the following critical section must include the
         // CheckBlock() call as well.
         LOCK(cs_main);
+        const int64_t nTimeLocked = GetTimeMicros();
 
         // Ensure that CheckBlock() passes before calling AcceptBlock, as
         // belt-and-suspenders.
         bool ret =
             CheckBlock(*pblock, state, config.GetChainParams().GetConsensus(),
                        BlockValidationOptions(config));
+        const int64_t nTimeChecked = GetTimeMicros();
         if (ret) {
             // Store to disk
             ret = g_chainstate.AcceptBlock(
                 config, pblock, state, fForceProcessing, nullptr, fNewBlock);
         }
+        LogPrint(BCLog::BENCH, "ProcessNewBlock: wait for cs_main %.2fms, CheckBlock %.2fms, AcceptBlock %.2fms\n",
+                 0.001 * (nTimeLocked - nTimeStart), 0.001 * (nTimeChecked - nTimeLocked),
+                 0.001 * (GetTimeMicros() - nTimeChecked));
 
         if (!ret) {
             GetMainSignals().BlockChecked(*pblock, state);
@@ -4270,10 +4283,13 @@ bool ProcessNewBlock(const Config &config,
 
     // Only used to report errors, not invalidity - ignore it
     CValidationState state;
+    const int64_t nTimeActivate = GetTimeMicros();
     if (!g_chainstate.ActivateBestChain(config, state, pblock)) {
         return error("%s: ActivateBestChain failed (%s)", __func__,
                      FormatStateMessage(state));
     }
+    LogPrint(BCLog::BENCH, "ProcessNewBlock: ActivateBestChain %.2fms\n",
+             0.001 * (GetTimeMicros() - nTimeActivate));
 
     return true;
 }

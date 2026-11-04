@@ -32,6 +32,28 @@ CBlockHeaderAndShortTxIDs::CBlockHeaderAndShortTxIDs(const CBlock &block)
     }
 }
 
+CBlockHeaderAndShortTxIDs::CBlockHeaderAndShortTxIDs(const CBlockHeaderAndShortTxIDs &base, const CBlock &block,
+                                                     const std::vector<uint32_t> &prefill)
+    : shorttxidk0(base.shorttxidk0), shorttxidk1(base.shorttxidk1), nonce(base.nonce), header(base.header) {
+    assert(base.prefilledtxn.size() == 1 && base.BlockTxCount() == block.vtx.size());
+    shorttxids.reserve(base.shorttxids.size() - prefill.size());
+    prefilledtxn.reserve(1 + prefill.size());
+    prefilledtxn.push_back(base.prefilledtxn[0]);
+    // Prefilled indices are stored as the offset from the previous prefilled index, minus one.
+    uint32_t last = 0;
+    auto next = prefill.begin();
+    for (uint32_t i = 1; i < block.vtx.size(); i++) {
+        if (next != prefill.end() && *next == i) {
+            prefilledtxn.push_back({i - last - 1, block.vtx[i]});
+            last = i;
+            ++next;
+        } else {
+            shorttxids.push_back(base.shorttxids[i - 1]);
+        }
+    }
+    assert(next == prefill.end());
+}
+
 void CBlockHeaderAndShortTxIDs::FillShortTxIDSelector() {
     CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
     stream << header << nonce;

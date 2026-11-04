@@ -120,6 +120,12 @@ class GBTLightTest(BitcoinTestFramework):
             '-gbtstoredir={}'.format(self._custom_gbt_dir)
         )
 
+    def skip_test_if_missing_module(self):
+        # XCHAIN: with the wallet compiled, the test fills templates with wallet (secp256k1) transactions, so use the
+        # inherited rules.
+        if self.is_wallet_compiled():
+            self.inherited_bch_rules = True
+
     def check_job_id(self, gbtl):
         # check job_id is ok
         assert_equal(

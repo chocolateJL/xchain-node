@@ -59,6 +59,11 @@ class BlockchainTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
 
+    def skip_test_if_missing_module(self):
+        # XCHAIN: with the wallet compiled, _test_getblock spends wallet (secp256k1) coins, so use the inherited rules.
+        if self.is_wallet_compiled():
+            self.inherited_bch_rules = True
+
     def run_test(self):
         # Set extra args with pruning after rescan is complete
         self.restart_node(0, extra_args=['-stopatheight=207', '-prune=1'])

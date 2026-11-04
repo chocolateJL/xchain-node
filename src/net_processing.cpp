@@ -109,6 +109,11 @@ static constexpr auto OVERLOADED_PEER_TX_DELAY = std::chrono::seconds{2};
 /** How long to wait before downloading a transaction from an additional peer. */
 static constexpr auto GETDATA_TX_INTERVAL = std::chrono::seconds{60}; // 1 minute
 /**
+ * Most transaction bytes to prefill in a compact block for one peer (see TxsToPrefill): about 2 seconds of 1,000
+ * P2PQH transactions per second, more than one round trip of new transactions at that rate.
+ */
+static constexpr uint64_t MAX_CMPCTBLOCK_PREFILL_BYTES = 8'000'000;
+/**
  * Limit to avoid sending big packets. Not used in processing incoming GETDATA
  * for compatibility.
  */
@@ -984,6 +989,34 @@ void PeerLogicValidation::BlockConnected(const std::shared_ptr<const CBlock> &pb
     g_last_tip_update = GetTime();
 }
 
+/**
+ * The indices of the block's transactions that the peer probably lacks, to prefill in the compact block we send it:
+ * those we have not announced to it (not in our mempool, accepted after our last announcement to it, or still queued
+ * for it) and that it has not announced to us. Without them the peer would need another round trip (getblocktxn).
+ * At most MAX_CMPCTBLOCK_PREFILL_BYTES of transactions; the peer requests any others it lacks.
+ */
+static std::vector<uint32_t> TxsToPrefill(CNode &peer, const CBlock &block, const std::vector<uint64_t> &entryIds) {
+    std::vector<uint32_t> prefill;
+    uint64_t bytes = 0;
+    LOCK(peer.cs_inventory);
+    const uint64_t lastInvEntryId = peer.lastInvEntryId;
+    for (uint32_t i = 1; i < block.vtx.size(); ++i) {
+        const TxId &txid = block.vtx[i]->GetId();
+        const uint64_t entryId = entryIds[i];
+        const bool announced = entryId != 0 && entryId <= lastInvEntryId &&
+                               !peer.setInventoryTxToSendTopoSorted.count({entryId, txid}) &&
+                               !peer.setInventoryTxToSendTopoSorted.count({0, txid});
+        if (announced || peer.filterInventoryKnown.contains(txid)) {
+            continue;
+        }
+        bytes += block.vtx[i]->GetTotalSize();
+        if (bytes > MAX_CMPCTBLOCK_PREFILL_BYTES) {
+            break;
+        }
+        prefill.push_back(i);
+    }
+    return prefill;
+}
 
 /**
  * Maintain state about the best-seen block and fast-announce a compact block
@@ -1010,8 +1043,11 @@ void PeerLogicValidation::NewPoWValidBlock(const CBlockIndex *pindex, const std:
                                           .blockSize = blockSize};
     }
 
+    // Mempool entry ids of the block's transactions (0 if not in our mempool), filled when first needed.
+    std::vector<uint64_t> entryIds;
+
     connman->ForEachNode([this, &pcmpctblock, pindex, &msgMaker,
-                          &hashBlock](const NodeRef &pnode) {
+                          &hashBlock, &pblock, &entryIds](const NodeRef &pnode) {
         AssertLockHeld(cs_main);
 
         // TODO: Avoid the repeated-serialization here
@@ -1024,11 +1060,18 @@ void PeerLogicValidation::NewPoWValidBlock(const CBlockIndex *pindex, const std:
         // but we don't think they have this one, go ahead and announce it.
         if (state.fPreferHeaderAndIDs && !PeerHasHeader(&state, pindex) &&
             PeerHasHeader(&state, pindex->pprev)) {
-            LogPrint(BCLog::NET, "%s sending header-and-ids %s to peer=%d\n",
-                     "PeerLogicValidation::NewPoWValidBlock",
-                     hashBlock.ToString(), pnode->GetId());
+            const int64_t nTimeStart = GetTimeMicros();
+            if (entryIds.empty()) {
+                entryIds = g_mempool.GetEntryIds(pblock->vtx);
+            }
+            const std::vector<uint32_t> prefill = TxsToPrefill(*pnode, *pblock, entryIds);
+            LogPrint(BCLog::CMPCTBLOCK, "sending cmpctblock %s to peer=%d with %u of %u txs prefilled (%.2fms)\n",
+                     hashBlock.ToString(), pnode->GetId(), prefill.size(), pblock->vtx.size() - 1,
+                     0.001 * (GetTimeMicros() - nTimeStart));
             connman->PushMessage(
-                pnode, msgMaker.Make(NetMsgType::CMPCTBLOCK, *pcmpctblock));
+                pnode, msgMaker.Make(NetMsgType::CMPCTBLOCK,
+                                     prefill.empty() ? *pcmpctblock
+                                                     : CBlockHeaderAndShortTxIDs(*pcmpctblock, *pblock, prefill)));
             state.pindexBestHeaderSent = pindex;
         }
     });
@@ -2733,6 +2776,9 @@ bool PeerLogicValidation::ProcessMessage(const Config &config, const NodeRef &pf
     if (msg_type == NetMsgType::GETBLOCKTXN) {
         BlockTransactionsRequest req;
         vRecv >> req;
+        LogPrint(BCLog::CMPCTBLOCK, "getblocktxn %s (%u txs) from peer=%d waited %.2fms to be processed\n",
+                 req.blockhash.ToString(), req.indices.size(), pfrom->GetId(),
+                 0.001 * (GetTimeMicros() - nTimeReceived));
 
         if (req.indices.empty()) {
             // No legitimate reason to ask for no transactions.
@@ -3033,6 +3079,8 @@ bool PeerLogicValidation::ProcessMessage(const Config &config, const NodeRef &pf
 
         CBlockHeaderAndShortTxIDs cmpctblock;
         vRecv >> cmpctblock;
+        LogPrint(BCLog::CMPCTBLOCK, "cmpctblock %s from peer=%d waited %.2fms to be processed\n",
+                 cmpctblock.header.GetHash().ToString(), pfrom->GetId(), 0.001 * (GetTimeMicros() - nTimeReceived));
 
         bool received_new_header = false;
 
@@ -3311,6 +3359,8 @@ bool PeerLogicValidation::ProcessMessage(const Config &config, const NodeRef &pf
 
         BlockTransactions resp;
         vRecv >> resp;
+        LogPrint(BCLog::CMPCTBLOCK, "blocktxn %s from peer=%d waited %.2fms to be processed\n",
+                 resp.blockhash.ToString(), pfrom->GetId(), 0.001 * (GetTimeMicros() - nTimeReceived));
 
         std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
         bool fBlockRead = false;
@@ -3824,11 +3874,15 @@ bool PeerLogicValidation::ProcessMessages(const Config &config, NodeRef pfrom, s
     //
     bool fMoreWork = false;
 
-    if (!pfrom->vRecvGetData.empty()) {
+    // A compact-block message waiting (at the front of the queue) goes before the getdata responses and orphans that
+    // would otherwise hold up this peer's messages.
+    const bool fBlockRelayMsg = WITH_LOCK(pfrom->cs_vProcessMsg, return pfrom->nBlockRelayMsgs > 0);
+
+    if (!fBlockRelayMsg && !pfrom->vRecvGetData.empty()) {
         ProcessGetData(config, pfrom, interruptMsgProc);
     }
 
-    {
+    if (!fBlockRelayMsg) {
         LOCK(cs_main);
         if (m_orphanage.HaveTxToReconsider(pfrom->GetId())) {
             ProcessOrphanTx(config, pfrom->GetId());
@@ -3842,11 +3896,11 @@ bool PeerLogicValidation::ProcessMessages(const Config &config, NodeRef pfrom, s
 
     // this maintains the order of responses and prevents vRecvGetData from
     // growing unbounded
-    if (!pfrom->vRecvGetData.empty()) {
+    if (!fBlockRelayMsg && !pfrom->vRecvGetData.empty()) {
         return true;
     }
 
-    {
+    if (!fBlockRelayMsg) {
         LOCK(cs_main);
         if (m_orphanage.HaveTxToReconsider(pfrom->GetId())) {
             return true;
@@ -3866,6 +3920,9 @@ bool PeerLogicValidation::ProcessMessages(const Config &config, NodeRef pfrom, s
         }
         // Just take one message
         msgs.splice(msgs.begin(), pfrom->vProcessMsg, pfrom->vProcessMsg.begin());
+        if (pfrom->nBlockRelayMsgs > 0) {
+            --pfrom->nBlockRelayMsgs;
+        }
         pfrom->nProcessQueueSize -= msgs.front().vRecv.size() + CMessageHeader::HEADER_SIZE;
         pfrom->fPauseRecv = pfrom->nProcessQueueSize > connman->GetReceiveFloodSize();
         fMoreWork = !pfrom->vProcessMsg.empty();

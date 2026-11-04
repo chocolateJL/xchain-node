@@ -274,6 +274,51 @@ BOOST_AUTO_TEST_CASE(NonCoinbasePreforwardRTTest) {
                       SHARED_TX_OFFSET - 1);
 }
 
+BOOST_AUTO_TEST_CASE(PrefilledCopyRTTest) {
+    CTxMemPool pool;
+    const CBlock block(BuildBlockTestCase());
+    const CBlockHeaderAndShortTxIDs base(block);
+    const TestHeaderAndShortIDs baseIDs(base);
+
+    for (const std::vector<uint32_t> &prefill : std::vector<std::vector<uint32_t>>{{}, {1}, {2}, {1, 2}}) {
+        const CBlockHeaderAndShortTxIDs withPrefill(base, block, prefill);
+        BOOST_CHECK_EQUAL(withPrefill.BlockTxCount(), block.vtx.size());
+
+        // Same nonce, so the remaining short IDs are base's.
+        const TestHeaderAndShortIDs ids(withPrefill);
+        BOOST_CHECK_EQUAL(ids.nonce, baseIDs.nonce);
+        std::vector<uint64_t> expectedIDs;
+        std::vector<CTransactionRef> missing;
+        for (uint32_t i = 1; i < block.vtx.size(); i++) {
+            if (std::find(prefill.begin(), prefill.end(), i) == prefill.end()) {
+                expectedIDs.push_back(baseIDs.shorttxids[i - 1]);
+                missing.push_back(block.vtx[i]);
+            }
+        }
+        BOOST_CHECK(ids.shorttxids == expectedIDs);
+
+        CDataStream stream(SER_NETWORK, PROTOCOL_VERSION);
+        stream << withPrefill;
+        CBlockHeaderAndShortTxIDs received;
+        stream >> received;
+
+        // With an empty mempool, the receiver has exactly the coinbase and the prefilled transactions.
+        PartiallyDownloadedBlock partialBlock(GetConfig(), &pool);
+        BOOST_CHECK(partialBlock.InitData(received, extra_txn) == READ_STATUS_OK);
+        for (uint32_t i = 0; i < block.vtx.size(); i++) {
+            const bool prefilled = i == 0 || std::find(prefill.begin(), prefill.end(), i) != prefill.end();
+            BOOST_CHECK_EQUAL(partialBlock.IsTxAvailable(i), prefilled);
+        }
+
+        CBlock filled;
+        BOOST_CHECK(partialBlock.FillBlock(filled, missing) == READ_STATUS_OK);
+        BOOST_CHECK_EQUAL(filled.GetHash().ToString(), block.GetHash().ToString());
+        bool mutated;
+        BOOST_CHECK_EQUAL(BlockMerkleRoot(filled, &mutated).ToString(), block.hashMerkleRoot.ToString());
+        BOOST_CHECK(!mutated);
+    }
+}
+
 BOOST_AUTO_TEST_CASE(SufficientPreforwardRTTest) {
     CTxMemPool pool;
     TestMemPoolEntryHelper entry;

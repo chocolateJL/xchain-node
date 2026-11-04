@@ -685,6 +685,8 @@ public:
     CTransactionRef get(const TxId &txid) const;
     TxMempoolInfo info(const TxId &txid) const;
     std::vector<TxMempoolInfo> infoAll() const;
+    /** The entry id of each transaction, or 0 for those not in the mempool. */
+    std::vector<uint64_t> GetEntryIds(const std::vector<CTransactionRef> &txs) const;
 
     CFeeRate estimateFee() const;
 

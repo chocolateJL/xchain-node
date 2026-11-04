@@ -767,6 +767,9 @@ public:
     int readData(const char *pch, uint32_t nBytes);
 };
 
+/** True for the messages that relay a compact block: cmpctblock, getblocktxn and blocktxn (see nBlockRelayMsgs). */
+bool IsBlockRelayMessage(const std::string &msg_type);
+
 /** Information about a peer */
 class CNode : public std::enable_shared_from_this<CNode> {
     friend class CConnman;
@@ -788,6 +791,9 @@ public:
     RecursiveMutex cs_vProcessMsg;
     std::list<CNetMessage> vProcessMsg GUARDED_BY(cs_vProcessMsg);
     size_t nProcessQueueSize{0};
+    // Number of compact-block relay messages (IsBlockRelayMessage) at the front of vProcessMsg. They are queued
+    // ahead of the other messages so that a block does not wait behind a backlog of transaction traffic.
+    size_t nBlockRelayMsgs GUARDED_BY(cs_vProcessMsg){0};
 
     RecursiveMutex cs_sendProcessing;
 

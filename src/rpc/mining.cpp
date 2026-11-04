@@ -143,6 +143,7 @@ UniValue generateBlocks(const Config &config,
         // usually want to make full-sized blocks during functional testing
         const double maxGBTTimeSecs = gArgs.GetArg("-maxgbttime", DEFAULT_MAX_GBT_TIME) / 1e3;
 
+        const int64_t nTimeStart = GetTimeMicros();
         const CBlockIndex *pindexMinedTip{};
         std::unique_ptr<CBlockTemplate> pblocktemplate(
             BlockAssembler(config, g_mempool)
@@ -154,7 +155,9 @@ UniValue generateBlocks(const Config &config,
 
         CBlock *pblock = &pblocktemplate->block;
 
+        const int64_t nTimeAssembled = GetTimeMicros();
         IncrementExtraNonce(pblock, pindexMinedTip, config, nExtraNonce);
+        const uint32_t nNonceStart = pblock->nNonce;
 
         const Consensus::Params &consensusParams = config.GetChainParams().GetConsensus();
         // XCHAIN: on RandomX chains the proof is the RandomX hash under the seed of the block being extended.
@@ -179,14 +182,19 @@ UniValue generateBlocks(const Config &config,
             continue;
         }
 
+        const int64_t nTimeSolved = GetTimeMicros();
         std::shared_ptr<const CBlock> shared_pblock =
-            std::make_shared<const CBlock>(*pblock);
+            std::make_shared<const CBlock>(std::move(*pblock));
         if (!ProcessNewBlock(config, shared_pblock, true, nullptr)) {
             throw JSONRPCError(RPC_INTERNAL_ERROR,
                                "ProcessNewBlock, block not accepted");
         }
+        const int64_t nTimeProcessed = GetTimeMicros();
+        LogPrint(BCLog::BENCH, "generateBlocks: assemble %.2fms, merkle+pow %.2fms (%u hashes), process %.2fms\n",
+                 0.001 * (nTimeAssembled - nTimeStart), 0.001 * (nTimeSolved - nTimeAssembled),
+                 shared_pblock->nNonce - nNonceStart + 1, 0.001 * (nTimeProcessed - nTimeSolved));
         ++nHeight;
-        blockHashes.emplace_back(pblock->GetHash().GetHex());
+        blockHashes.emplace_back(shared_pblock->GetHash().GetHex());
 
         // Mark script as important because it was used at least for one
         // coinbase output if the script came from the wallet.

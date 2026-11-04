@@ -558,6 +558,17 @@ TxMempoolInfo CTxMemPool::info(const TxId &txid) const {
     return GetInfo(i);
 }
 
+std::vector<uint64_t> CTxMemPool::GetEntryIds(const std::vector<CTransactionRef> &txs) const {
+    std::vector<uint64_t> entryIds;
+    entryIds.reserve(txs.size());
+    LOCK(cs);
+    for (const CTransactionRef &tx : txs) {
+        const auto it = mapTx.find(tx->GetId());
+        entryIds.push_back(it == mapTx.end() ? 0 : it->GetEntryId());
+    }
+    return entryIds;
+}
+
 CFeeRate CTxMemPool::estimateFee() const {
     LOCK(cs);
 

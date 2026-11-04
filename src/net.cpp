@@ -172,6 +172,11 @@ static int GetnScore(const CService &addr) {
     return mapLocalHost[addr].nScore;
 }
 
+bool IsBlockRelayMessage(const std::string &msg_type) {
+    return msg_type == NetMsgType::CMPCTBLOCK || msg_type == NetMsgType::GETBLOCKTXN ||
+           msg_type == NetMsgType::BLOCKTXN;
+}
+
 // Is our peer's addrLocal potentially useful as an external IP source?
 bool IsPeerAddrLocalGood(const NodeRef &pnode) {
     CService addrLocal = pnode->GetAddrLocal();
@@ -1549,9 +1554,14 @@ void CConnman::SocketHandler()
                     }
                     {
                         LOCK(pnode->cs_vProcessMsg);
-                        pnode->vProcessMsg.splice(pnode->vProcessMsg.end(),
-                                                  pnode->vRecvMsg,
-                                                  pnode->vRecvMsg.begin(), it);
+                        // Compact-block messages go after those already at the front, the others at the end.
+                        while (pnode->vRecvMsg.begin() != it) {
+                            auto pos = pnode->vProcessMsg.end();
+                            if (IsBlockRelayMessage(pnode->vRecvMsg.front().hdr.GetCommand())) {
+                                pos = std::next(pnode->vProcessMsg.begin(), pnode->nBlockRelayMsgs++);
+                            }
+                            pnode->vProcessMsg.splice(pos, pnode->vRecvMsg, pnode->vRecvMsg.begin());
+                        }
                         pnode->nProcessQueueSize += nSizeAdded;
                         pnode->fPauseRecv =
                             pnode->nProcessQueueSize > nReceiveFloodSize;

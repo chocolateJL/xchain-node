@@ -119,6 +119,13 @@ public:
 
     CBlockHeaderAndShortTxIDs(const CBlock &block);
 
+    /**
+     * A copy of `base`, which was built from `block`, that also prefills the block's transactions at the indices in
+     * `prefill` (ascending, each in [1, block.vtx.size())). Keeps base's nonce, so the short IDs need no recomputing.
+     */
+    CBlockHeaderAndShortTxIDs(const CBlockHeaderAndShortTxIDs &base, const CBlock &block,
+                              const std::vector<uint32_t> &prefill);
+
     uint64_t GetShortID(const TxHash &txhash) const;
 
     size_t BlockTxCount() const {
