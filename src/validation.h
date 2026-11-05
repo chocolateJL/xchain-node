@@ -184,6 +184,8 @@ static constexpr int64_t DEFAULT_MIN_FINALIZATION_DELAY = 2 * 60 * 60;
 static constexpr bool DEFAULT_PARK_DEEP_REORG = true;
 /** Default for -automaticunparking */
 static constexpr bool DEFAULT_AUTOMATIC_UNPARKING = true;
+/** Default for -deferblockwrite */
+static constexpr bool DEFAULT_DEFER_BLOCK_WRITE = true;
 
 extern CScript COINBASE_FLAGS;
 extern RecursiveMutex cs_main;
@@ -283,6 +285,12 @@ bool ProcessNewBlock(const Config &config,
                      const std::shared_ptr<const CBlock> pblock,
                      bool fForceProcessing, bool *fNewBlock)
     LOCKS_EXCLUDED(cs_main);
+
+/**
+ * True while ProcessNewBlock is writing this block to disk without cs_main.
+ * Until then the block index says we don't have its data.
+ */
+bool IsBlockBeingWritten(const BlockHash &hash) LOCKS_EXCLUDED(cs_main);
 
 /**
  * Process incoming block headers.

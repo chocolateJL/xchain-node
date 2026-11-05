@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <flatfile.h>
 #include <fs.h>
 #include <primitives/blockhash.h>
 #include <sync.h>
@@ -24,7 +25,6 @@ class CBlockUndo;
 class CValidationState;
 class CChainParams;
 class Config;
-struct FlatFilePos;
 namespace Consensus {
 struct Params;
 }
@@ -124,5 +124,26 @@ bool WriteUndoDataForBlock(const CBlockUndo &blockundo, CValidationState &state,
  */
 FlatFilePos SaveBlockToDisk(const CBlock &block, int nHeight, const CChainParams &chainparams, const FlatFilePos *dbp)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+/**
+ * Writing a new block in steps, so that the slow part runs without cs_main (see ProcessNewBlock):
+ * ReserveBlockPos (with cs_main), then FinalizeBlockFile if a file was left behind and WriteReservedBlock (no lock),
+ * then CommitBlockFileIfOld (with cs_main) before the block is marked as stored.
+ */
+struct BlockReservation {
+    /** Where the block goes (a null position on failure). */
+    FlatFilePos pos;
+    unsigned int blockSize{};
+    /** The block file this reservation left behind, or -1. */
+    int fileToFinalize{-1};
+};
+BlockReservation ReserveBlockPos(const CBlock &block, int nHeight) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+/** Returns the position of the block data, or a null position on failure. */
+FlatFilePos WriteReservedBlock(const CBlock &block, const BlockReservation &reservation,
+                               const CChainParams &chainparams);
+/** Truncate and commit a block file (and its undo file) that ReserveBlockPos left behind. */
+bool FinalizeBlockFile(int nFile);
+/** Commit a block file unless it is the current one, which FlushStateToDisk commits before writing the index. */
+bool CommitBlockFileIfOld(int nFile);
 
 void ThreadImport(const Config &config, std::vector<fs::path> vImportFiles);

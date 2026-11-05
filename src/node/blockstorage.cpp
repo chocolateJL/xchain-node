@@ -49,6 +49,9 @@ std::set<const CBlockIndex *> setDirtyBlockIndex GUARDED_BY(cs_main);
 /** Dirty block file entries. */
 std::set<int> setDirtyFileInfo GUARDED_BY(cs_LastBlockFile);
 
+/** Block files left behind by ReserveBlockPos that FinalizeBlockFile has not finalized yet. */
+static std::set<int> setBlockFilesToFinalize GUARDED_BY(cs_LastBlockFile);
+
 static FILE *OpenUndoFile(const FlatFilePos &pos, bool fReadOnly = false);
 static FlatFileSeq BlockFileSeq();
 static FlatFileSeq UndoFileSeq();
@@ -200,6 +203,11 @@ void FlushBlockFile(bool fFinalize = false) {
     bool status = true;
     status &= BlockFileSeq().Flush(block_pos_old, fFinalize);
     status &= UndoFileSeq().Flush(undo_pos_old, fFinalize);
+    // Blocks in files still waiting for FinalizeBlockFile may be in the block index we are about to write.
+    for (const int nFile : setBlockFilesToFinalize) {
+        status &= BlockFileSeq().Flush(FlatFilePos(nFile, 0));
+        status &= UndoFileSeq().Flush(FlatFilePos(nFile, 0));
+    }
     if (!status) {
         AbortNode("Flushing block file to disk failed. This is likely the "
                   "result of an I/O error.");
@@ -257,9 +265,16 @@ static fs::path GetBlockPosFilename(const FlatFilePos &pos) {
     return BlockFileSeq().FileName(pos);
 }
 
+/**
+ * If pFileToFinalize is non-null and this starts a new block file, the previous file is not finalized here; it is
+ * returned in *pFileToFinalize (else -1) for the caller to finalize with FinalizeBlockFile.
+ */
 static bool FindBlockPos(FlatFilePos &pos, unsigned int nAddSize, unsigned int nHeight, uint64_t nTime,
-                         bool fKnown = false) {
+                         bool fKnown = false, int *pFileToFinalize = nullptr) {
     LOCK(cs_LastBlockFile);
+    if (pFileToFinalize) {
+        *pFileToFinalize = -1;
+    }
 
     unsigned int nFile = fKnown ? pos.nFile : nLastBlockFile;
     if (vinfoBlockFile.size() <= nFile) {
@@ -283,7 +298,12 @@ static bool FindBlockPos(FlatFilePos &pos, unsigned int nAddSize, unsigned int n
             LogPrintf("Leaving block file %i: %s\n", nLastBlockFile,
                       vinfoBlockFile[nLastBlockFile].ToString());
         }
-        FlushBlockFile(!fKnown);
+        if (pFileToFinalize && !fKnown) {
+            setBlockFilesToFinalize.insert(nLastBlockFile);
+            *pFileToFinalize = nLastBlockFile;
+        } else {
+            FlushBlockFile(!fKnown);
+        }
         nLastBlockFile = nFile;
     }
 
@@ -343,7 +363,7 @@ static_assert(kBlockExtraSpaceNeeded == 8, "Unexpected block file format change"
 } // namespace
 
 static bool WriteBlockToDisk(const CBlock &block, FlatFilePos &pos, const unsigned nSize,
-                             const CMessageHeader::MessageMagic &messageStart) EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
+                             const CMessageHeader::MessageMagic &messageStart) {
     // Open history file to append
     CAutoFile fileout(OpenBlockFile(pos), SER_DISK, CLIENT_VERSION);
     if (fileout.IsNull()) {
@@ -610,6 +630,73 @@ FlatFilePos SaveBlockToDisk(const CBlock &block, int nHeight, const CChainParams
         }
     }
     return blockPos;
+}
+
+BlockReservation ReserveBlockPos(const CBlock &block, int nHeight) EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
+    BlockReservation reservation;
+    const size_t blockSize = ::GetSerializeSize(block, CLIENT_VERSION);
+    const size_t spaceNeeded = blockSize + kBlockExtraSpaceNeeded;
+    // Must assert the below to prevent overflow for both FindBlockPos() and WriteBlockToDisk() which use unsigned int
+    assert(std::in_range<unsigned>(spaceNeeded) && spaceNeeded >= blockSize && "Overflow check failed");
+    if (!FindBlockPos(reservation.pos, spaceNeeded, nHeight, block.GetBlockTime(), false,
+                      &reservation.fileToFinalize)) {
+        error("%s: FindBlockPos failed", __func__);
+        return BlockReservation();
+    }
+    reservation.blockSize = blockSize;
+    return reservation;
+}
+
+FlatFilePos WriteReservedBlock(const CBlock &block, const BlockReservation &reservation,
+                               const CChainParams &chainparams) {
+    FlatFilePos blockPos = reservation.pos;
+    if (!WriteBlockToDisk(block, blockPos, reservation.blockSize, chainparams.DiskMagic())) {
+        AbortNode("Failed to write block");
+        return FlatFilePos();
+    }
+    return blockPos;
+}
+
+static bool TruncateFlatFile(FlatFileSeq seq, const FlatFilePos &end) {
+    FILE *file = seq.Open(FlatFilePos(end.nFile, 0));
+    if (!file) {
+        return false;
+    }
+    const bool status = TruncateFile(file, end.nPos);
+    fclose(file);
+    return status;
+}
+
+bool FinalizeBlockFile(int nFile) {
+    bool status = true;
+    {
+        // Truncate under the lock: whatever is reserved in this file by then (such as undo data of a block being
+        // connected) lies below these sizes.
+        LOCK(cs_LastBlockFile);
+        status &= TruncateFlatFile(BlockFileSeq(), FlatFilePos(nFile, vinfoBlockFile[nFile].nSize));
+        status &= TruncateFlatFile(UndoFileSeq(), FlatFilePos(nFile, vinfoBlockFile[nFile].nUndoSize));
+    }
+    // Commit without the lock; until we are done, FlushBlockFile commits this file too.
+    status &= BlockFileSeq().Flush(FlatFilePos(nFile, 0));
+    status &= UndoFileSeq().Flush(FlatFilePos(nFile, 0));
+    WITH_LOCK(cs_LastBlockFile, setBlockFilesToFinalize.erase(nFile));
+    if (!status) {
+        AbortNode("Finalizing block file to disk failed. This is likely the result of an I/O error.");
+    }
+    return status;
+}
+
+bool CommitBlockFileIfOld(int nFile) {
+    if (WITH_LOCK(cs_LastBlockFile, return nFile == nLastBlockFile)) {
+        // FlushStateToDisk commits the current file before it writes the block index.
+        return true;
+    }
+    bool status = BlockFileSeq().Flush(FlatFilePos(nFile, 0));
+    status &= UndoFileSeq().Flush(FlatFilePos(nFile, 0));
+    if (!status) {
+        AbortNode("Flushing block file to disk failed. This is likely the result of an I/O error.");
+    }
+    return status;
 }
 
 struct CImportingNow {

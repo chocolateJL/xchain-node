@@ -1420,12 +1420,19 @@ void PeerLogicValidation::RelayAddress(const CAddress &addr, bool fReachable) co
 }
 
 void PeerLogicValidation::ProcessGetBlockData(const Config &config, const NodeRef &pfrom, const CInv &inv,
-                                              const std::atomic<bool> &interruptMsgProc [[maybe_unused]]) const {
+                                              const std::atomic<bool> &interruptMsgProc) const {
     AssertLockNotHeld(cs_main);
 
     const Consensus::Params &consensusParams = config.GetChainParams().GetConsensus();
 
     const BlockHash hash(inv.hash);
+
+    // A new block may still be on its way to disk (ProcessNewBlock writes it
+    // without cs_main). Answer once it is stored, as before, when the write
+    // held cs_main and this waited for the lock.
+    while (IsBlockBeingWritten(hash) && !interruptMsgProc) {
+        UninterruptibleSleep(std::chrono::milliseconds{10});
+    }
 
     bool send = false;
     const RecentBlock recent_block = WITH_LOCK(cs_most_recent_block, return m_most_recent_block);

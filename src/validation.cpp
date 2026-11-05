@@ -74,6 +74,13 @@
 #define MILLI 0.001
 class ConnectTrace;
 
+/** A new block that AcceptBlock left to ProcessNewBlock to write to disk without cs_main. */
+struct DeferredBlockWrite {
+    CBlockIndex *pindex = nullptr;
+    uint64_t blockSize = 0;
+    BlockReservation reservation;
+};
+
 /**
  * CChainState stores and provides an API to update our local knowledge of the
  * current best chain and header tree.
@@ -163,8 +170,17 @@ public:
     bool AcceptBlock(const Config &config,
                      const std::shared_ptr<const CBlock> &pblock,
                      CValidationState &state, bool fRequested,
-                     const FlatFilePos *dbp, bool *fNewBlock)
+                     const FlatFilePos *dbp, bool *fNewBlock,
+                     DeferredBlockWrite *pDeferredWrite = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    /** Mark a block that ProcessNewBlock wrote without cs_main as stored. */
+    bool FinishDeferredBlockWrite(const Config &config, const CBlock &block,
+                                  const DeferredBlockWrite &write,
+                                  const FlatFilePos &blockPos,
+                                  CValidationState &state)
+        EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    /** Blocks that AcceptBlock left to ProcessNewBlock to write without cs_main and that are not stored yet. */
+    std::set<const CBlockIndex *> m_blocksBeingWritten GUARDED_BY(cs_main);
 
     // Block (dis)connection on a given view:
     DisconnectResult DisconnectBlock(const CBlock &block,
@@ -4204,7 +4220,8 @@ bool ProcessNewBlockHeaders(const Config &config,
 bool CChainState::AcceptBlock(const Config &config,
                               const std::shared_ptr<const CBlock> &pblock,
                               CValidationState &state, bool fRequested,
-                              const FlatFilePos *dbp, bool *fNewBlock) {
+                              const FlatFilePos *dbp, bool *fNewBlock,
+                              DeferredBlockWrite *pDeferredWrite) {
     AssertLockHeld(cs_main);
 
     const CBlock &block = *pblock;
@@ -4220,7 +4237,7 @@ bool CChainState::AcceptBlock(const Config &config,
     // Try to process all requested blocks that we don't have, but only
     // process an unrequested block if it's new and has enough work to
     // advance our tip, and isn't too many blocks ahead.
-    bool fAlreadyHave = pindex->nStatus.hasData();
+    bool fAlreadyHave = pindex->nStatus.hasData() || m_blocksBeingWritten.count(pindex);
 
     // TODO: deal better with return value and error conditions for duplicate
     // and unrequested blocks.
@@ -4334,6 +4351,31 @@ bool CChainState::AcceptBlock(const Config &config,
     if (fNewBlock) {
         *fNewBlock = true;
     }
+    if (pDeferredWrite && !dbp && !fPruneMode) {
+        // Only reserve the space here; ProcessNewBlock writes the block without
+        // cs_main and then calls FinishDeferredBlockWrite. (Pruning nodes write
+        // here so that a file being written can't be pruned meanwhile.)
+        try {
+            pDeferredWrite->reservation = ReserveBlockPos(block, pindex->nHeight);
+        } catch (const std::runtime_error &e) {
+            return AbortNode(state, std::string("System error: ") + e.what());
+        }
+        if (pDeferredWrite->reservation.pos.IsNull()) {
+            state.Error(strprintf(
+                "%s: Failed to find position to write new block to disk",
+                __func__));
+            return false;
+        }
+        pDeferredWrite->pindex = pindex;
+        pDeferredWrite->blockSize = blockSize;
+        m_blocksBeingWritten.insert(pindex);
+        // Same format as below (the compact block went out "save" + "flush" before this line).
+        LogPrint(BCLog::BENCH, "AcceptBlock: checks %.2fms, NewPoWValidBlock %.2fms, save %.2fms, flush 0.00ms "
+                 "(write deferred)\n",
+                 0.001 * (nTimeChecked - nTimeStart), 0.001 * (nTimeAnnounced - nTimeChecked),
+                 0.001 * (GetTimeMicros() - nTimeAnnounced));
+        return true;
+    }
     try {
         FlatFilePos blockPos =
             SaveBlockToDisk(block, pindex->nHeight, chainparams, dbp);
@@ -4360,11 +4402,52 @@ bool CChainState::AcceptBlock(const Config &config,
     return true;
 }
 
+bool CChainState::FinishDeferredBlockWrite(const Config &config,
+                                           const CBlock &block,
+                                           const DeferredBlockWrite &write,
+                                           const FlatFilePos &blockPos,
+                                           CValidationState &state) {
+    AssertLockHeld(cs_main);
+
+    m_blocksBeingWritten.erase(write.pindex);
+    if (blockPos.IsNull()) {
+        return state.Error(strprintf("%s: Failed to write new block to disk",
+                                     __func__));
+    }
+    // A later block may have moved on to a new file while this one was
+    // written; then this block's data must be committed before the block index
+    // says we have it.
+    if (!CommitBlockFileIfOld(blockPos.nFile)) {
+        return state.Error("Failed to commit block file");
+    }
+    const Consensus::Params &consensusParams =
+        config.GetChainParams().GetConsensus();
+    try {
+        ReceivedBlockTransactions(block, write.pindex, blockPos);
+        MaintainAblaState(consensusParams, block, write.pindex, "AcceptBlock",
+                          write.blockSize);
+    } catch (const std::runtime_error &e) {
+        return AbortNode(state, std::string("System error: ") + e.what());
+    }
+
+    FlushStateToDisk(config.GetChainParams(), state, FlushStateMode::NONE);
+
+    CheckBlockIndex(consensusParams);
+    return true;
+}
+
+bool IsBlockBeingWritten(const BlockHash &hash) {
+    LOCK(cs_main);
+    const CBlockIndex *pindex = LookupBlockIndex(hash);
+    return pindex && g_chainstate.m_blocksBeingWritten.count(pindex);
+}
+
 bool ProcessNewBlock(const Config &config,
                      const std::shared_ptr<const CBlock> pblock,
                      bool fForceProcessing, bool *fNewBlock) {
     AssertLockNotHeld(cs_main);
 
+    DeferredBlockWrite deferredWrite;
     {
         if (fNewBlock) {
             *fNewBlock = false;
@@ -4387,9 +4470,12 @@ bool ProcessNewBlock(const Config &config,
                        BlockValidationOptions(config));
         const int64_t nTimeChecked = GetTimeMicros();
         if (ret) {
-            // Store to disk
-            ret = g_chainstate.AcceptBlock(
-                config, pblock, state, fForceProcessing, nullptr, fNewBlock);
+            // Store to disk (the write itself is left to us, below)
+            const bool defer = gArgs.GetBoolArg("-deferblockwrite",
+                                                DEFAULT_DEFER_BLOCK_WRITE);
+            ret = g_chainstate.AcceptBlock(config, pblock, state,
+                                           fForceProcessing, nullptr, fNewBlock,
+                                           defer ? &deferredWrite : nullptr);
         }
         LogPrint(BCLog::BENCH, "ProcessNewBlock: wait for cs_main %.2fms, CheckBlock %.2fms, AcceptBlock %.2fms\n",
                  0.001 * (nTimeLocked - nTimeStart), 0.001 * (nTimeChecked - nTimeLocked),
@@ -4398,6 +4484,42 @@ bool ProcessNewBlock(const Config &config,
         if (!ret) {
             GetMainSignals().BlockChecked(*pblock, state);
             return error("%s: AcceptBlock FAILED (%s)", __func__,
+                         FormatStateMessage(state));
+        }
+    }
+
+    if (deferredWrite.pindex) {
+        // Write the block without cs_main. For a large block this takes
+        // seconds, mostly in the disk; meanwhile other threads can accept
+        // transactions and serve peers. Until the block is marked as stored
+        // below, it is like a block whose data we have not received yet.
+        CValidationState state;
+        const int64_t nTimeStart = GetTimeMicros();
+        int64_t nTimeFinalized = nTimeStart;
+        FlatFilePos blockPos;
+        try {
+            const int fileToFinalize = deferredWrite.reservation.fileToFinalize;
+            if (fileToFinalize < 0 || FinalizeBlockFile(fileToFinalize)) {
+                nTimeFinalized = GetTimeMicros();
+                blockPos = WriteReservedBlock(*pblock, deferredWrite.reservation,
+                                              config.GetChainParams());
+            }
+        } catch (const std::runtime_error &e) {
+            AbortNode(state, std::string("System error: ") + e.what());
+        }
+        const int64_t nTimeWritten = GetTimeMicros();
+
+        LOCK(cs_main);
+        const int64_t nTimeLocked = GetTimeMicros();
+        const bool ret = g_chainstate.FinishDeferredBlockWrite(
+            config, *pblock, deferredWrite, blockPos, state);
+        LogPrint(BCLog::BENCH, "ProcessNewBlock: without cs_main: commit previous block file %.2fms, write %.2fms; "
+                 "wait for cs_main %.2fms, finish %.2fms\n",
+                 0.001 * (nTimeFinalized - nTimeStart), 0.001 * (nTimeWritten - nTimeFinalized),
+                 0.001 * (nTimeLocked - nTimeWritten), 0.001 * (GetTimeMicros() - nTimeLocked));
+        if (!ret) {
+            GetMainSignals().BlockChecked(*pblock, state);
+            return error("%s: writing the block FAILED (%s)", __func__,
                          FormatStateMessage(state));
         }
     }
@@ -5232,6 +5354,7 @@ void CChainState::UnloadBlockIndex() {
     nBlockSequenceId = 1;
     m_failed_blocks.clear();
     setBlockIndexCandidates.clear();
+    m_blocksBeingWritten.clear();
 }
 
 // May NOT be used after any connections are up as much

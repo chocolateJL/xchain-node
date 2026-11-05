@@ -979,6 +979,11 @@ void SetupServerArgs() {
                   DEFAULT_PQ_ADMIT_AVX2),
         ArgsManager::ALLOW_BOOL | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     gArgs.AddArg(
+        "-deferblockwrite",
+        strprintf("Write new blocks to disk without holding cs_main; non-pruning nodes only (default: %d)",
+                  DEFAULT_DEFER_BLOCK_WRITE),
+        ArgsManager::ALLOW_BOOL | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
+    gArgs.AddArg(
         "-maxscriptcachesize=<n>",
         strprintf("Limit size of script cache to <n> MiB (0 to %d, default: %d)",
                   MAX_MAX_SCRIPT_CACHE_SIZE, DEFAULT_MAX_SCRIPT_CACHE_SIZE),
