@@ -562,17 +562,58 @@ BOOST_AUTO_TEST_CASE(noncanonical_hint_rejected) {
     const size_t first = H + (poly == 0 ? 0 : sig[H + OMEGA + poly - 1]);
     const size_t used = sig[H + OMEGA + K - 1];
 
+    // The AVX2 build used for mempool acceptance (where available) must reject them too.
+    pqsig::InitAdmissionVerifier(true);
+    BOOST_CHECK(pqsig::VerifyForAdmission(key.pubkey, sig, digest));
     const auto rejected = [&](const char *what, const auto &mutate) {
         Bytes bad = sig;
         mutate(bad);
         BOOST_REQUIRE_MESSAGE(bad != sig, what);
         BOOST_CHECK_MESSAGE(!pqsig::Verify(key.pubkey, bad, digest), what);
+        BOOST_CHECK_MESSAGE(!pqsig::VerifyForAdmission(key.pubkey, bad, digest), what);
     };
     rejected("two hint indices swapped", [&](Bytes &s) { std::swap(s[first], s[first + 1]); });
     rejected("duplicate hint index", [&](Bytes &s) { s[first + 1] = s[first]; });
     rejected("nonzero unused index slot", [&](Bytes &s) { s[H + used] = 1; });
     rejected("count above omega", [&](Bytes &s) { s[H + OMEGA + K - 1] = OMEGA + 1; });
     rejected("decreasing counts", [&](Bytes &s) { s[H + OMEGA + K - 2] = uint8_t(used + 1); });
+    pqsig::InitAdmissionVerifier(false);
+}
+
+/**
+ * The AVX2 build that verifies signatures on mempool acceptance (decision D12) must agree with the portable build on
+ * valid signatures and on corrupted signatures, keys and messages. Without AVX2 both calls use the portable build.
+ */
+BOOST_AUTO_TEST_CASE(admission_build_matches_portable) {
+    const bool avx2 = pqsig::InitAdmissionVerifier(true);
+    BOOST_TEST_MESSAGE("admission build: " << (avx2 ? "AVX2" : "portable"));
+    const auto same = [](const Bytes &pubkey, const Bytes &sig, const uint256 &digest) {
+        const bool portable = pqsig::Verify(pubkey, sig, digest);
+        BOOST_CHECK_EQUAL(pqsig::VerifyForAdmission(pubkey, sig, digest), portable);
+        return portable;
+    };
+    const auto flipByte = [](Bytes bytes, size_t from) {
+        bytes[from + InsecureRandRange(bytes.size() - from)] ^= uint8_t(1 + InsecureRandRange(255));
+        return bytes;
+    };
+    for (int i = 0; i < 200; ++i) {
+        const PQKey key = MakeKey(uint8_t(i));
+        const uint256 digest = InsecureRand256();
+        Bytes sig;
+        BOOST_REQUIRE(pqsig::Sign(key.secret, digest, sig));
+
+        BOOST_CHECK(same(key.pubkey, sig, digest));
+        BOOST_CHECK(!same(key.pubkey, flipByte(sig, 0), digest));
+        BOOST_CHECK(!same(flipByte(key.pubkey, 1), sig, digest));
+        BOOST_CHECK(!same(key.pubkey, sig, InsecureRand256()));
+        BOOST_CHECK(!same(key.pubkey, Bytes(sig.begin(), sig.end() - 1), digest));
+        Bytes noise(sig.size());
+        for (uint8_t &b : noise) {
+            b = uint8_t(InsecureRandBits(8));
+        }
+        BOOST_CHECK(!same(key.pubkey, noise, digest));
+    }
+    pqsig::InitAdmissionVerifier(false);
 }
 
 /**

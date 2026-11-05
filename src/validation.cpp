@@ -443,12 +443,39 @@ std::string FormatStateMessage(const CValidationState &state) {
         state.GetRejectCode());
 }
 
+namespace {
+/**
+ * XCHAIN: where mempool acceptance spends its time, summed over accepted transactions and logged as bench every
+ * INTERVAL of them: prechecks, scripts under standard flags, scripts under consensus flags, adding to the mempool.
+ */
+class AdmissionTimes {
+    static constexpr int64_t INTERVAL = 20'000;
+    int64_t count = 0, pre = 0, scripts = 0, scriptsConsensus = 0, add = 0;
+
+public:
+    void Add(int64_t start, int64_t scriptsStart, int64_t scriptsEnd, int64_t consensusStart, int64_t consensusEnd,
+             int64_t end) {
+        pre += scriptsStart - start + consensusStart - scriptsEnd;
+        scripts += scriptsEnd - scriptsStart;
+        scriptsConsensus += consensusEnd - consensusStart;
+        add += end - consensusEnd;
+        if (++count == INTERVAL) {
+            LogPrint(BCLog::BENCH, "mempool acceptance: prechecks %.1fus, scripts %.1fus, scripts (consensus flags) "
+                     "%.1fus, adding %.1fus per accepted tx (%d txs)\n", double(pre) / count,
+                     double(scripts) / count, double(scriptsConsensus) / count, double(add) / count, count);
+            count = pre = scripts = scriptsConsensus = add = 0;
+        }
+    }
+};
+AdmissionTimes g_admissionTimes GUARDED_BY(cs_main);
+} // namespace
+
 // Used to avoid mempool polluting consensus critical paths if CCoinsViewMempool
 // were somehow broken and returning the wrong scriptPubKeys
 static bool CheckInputsFromMempoolAndCache(
     const CTransaction &tx, CValidationState &state,
     const CCoinsViewCache &view, const CTxMemPool &pool, const uint32_t flags,
-    bool cacheSigStore, PrecomputedTransactionData &txdata, int &nSigChecksOut)
+    bool cacheSigStore, bool cacheScriptStore, PrecomputedTransactionData &txdata, int &nSigChecksOut)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
     AssertLockHeld(cs_main);
 
@@ -481,7 +508,7 @@ static bool CheckInputsFromMempoolAndCache(
         }
     }
 
-    return CheckInputs(tx, state, view, true, flags, cacheSigStore, true, txdata, nSigChecksOut);
+    return CheckInputs(tx, state, view, true, flags, cacheSigStore, cacheScriptStore, txdata, nSigChecksOut);
 }
 
 static bool
@@ -502,6 +529,11 @@ AcceptToMemoryPoolWorker(const Config &config, CTxMemPool &pool,
     // mempool "read lock" (held through
     // GetMainSignals().TransactionAddedToMempool())
     LOCK(pool.cs);
+
+    // PQ signatures checked from here on are checked for mempool acceptance (see PQAdmissionScope).
+    const PQAdmissionScope pqAdmissionScope;
+    const int64_t nTimeStart = GetTimeMicros();
+    int64_t nTimeScripts = 0, nTimeScriptsDone = 0, nTimeConsensus = 0, nTimeConsensusDone = 0;
 
     if (pfMissingInputs) {
         *pfMissingInputs = false;
@@ -734,10 +766,12 @@ AcceptToMemoryPoolWorker(const Config &config, CTxMemPool &pool,
 
         int nSigChecksStandard;
         PrecomputedTransactionData txdata;
+        nTimeScripts = GetTimeMicros();
         if (!CheckInputs(tx, state, view, true, scriptVerifyFlags, true, false, txdata, nSigChecksStandard)) {
             // State filled in by CheckInputs.
             return false;
         }
+        nTimeScriptsDone = GetTimeMicros();
 
         CTxMemPoolEntry entry(ptx, nFees, nAcceptTime, fSpendsCoinbase, nSigChecksStandard, lp);
 
@@ -766,9 +800,13 @@ AcceptToMemoryPoolWorker(const Config &config, CTxMemPool &pool,
         // There is a similar check in CreateNewBlock() to prevent creating
         // invalid blocks (using TestBlockValidity), however allowing such
         // transactions into the mempool can be exploited as a DoS attack.
+        //
+        // XCHAIN: the script execution cache lets block validation skip this transaction, so it may only record a
+        // result that rests on the portable ML-DSA build (decision D12); see PQAdmissionScope.
         int nSigChecksConsensus;
+        nTimeConsensus = GetTimeMicros();
         if (!CheckInputsFromMempoolAndCache(tx, state, view, pool,
-                                            nextBlockScriptVerifyFlags, true,
+                                            nextBlockScriptVerifyFlags, true, false,
                                             txdata, nSigChecksConsensus)) {
             // This can occur under some circumstances, if the node receives an
             // unrequested tx which is invalid due to new consensus rules not
@@ -776,6 +814,10 @@ AcceptToMemoryPoolWorker(const Config &config, CTxMemPool &pool,
             return error("%s: BUG! PLEASE REPORT THIS! CheckInputs failed "
                          "against next-block but not STANDARD flags %s, %s",
                          __func__, txid.ToString(), FormatStateMessage(state));
+        }
+        nTimeConsensusDone = GetTimeMicros();
+        if (!pqAdmissionScope.UsedAVX2Results()) {
+            AddKeyInScriptCache(ScriptCacheKey(tx, nextBlockScriptVerifyFlags), nSigChecksConsensus);
         }
 
         if (nSigChecksStandard != nSigChecksConsensus) {
@@ -823,6 +865,9 @@ AcceptToMemoryPoolWorker(const Config &config, CTxMemPool &pool,
 
         if (pinfo) {
             pinfo->entryId = entryId;
+        }
+        if (pqAdmissionScope.UsedAVX2Results()) {
+            pqAdmissionScope.QueueConfirmation(tx, ScriptCacheKey(tx, nextBlockScriptVerifyFlags), nSigChecksConsensus);
         }
     }
 
@@ -874,6 +919,8 @@ AcceptToMemoryPoolWorker(const Config &config, CTxMemPool &pool,
             GetMainSignals().BadDSProofsDetectedFromNodeIds(badProofNodeIds); // punish peer(s)
     }
 
+    g_admissionTimes.Add(nTimeStart, nTimeScripts, nTimeScriptsDone, nTimeConsensus, nTimeConsensusDone,
+                         GetTimeMicros());
     return true;
 }
 
@@ -912,6 +959,82 @@ bool AcceptToMemoryPool(const Config &config, CTxMemPool &pool,
     return AcceptToMemoryPoolWithTime(config, pool, state, tx, pfMissingInputs,
                                       GetTime(), bypass_limits, nAbsurdFee,
                                       test_accept, pinfo);
+}
+
+std::vector<ScriptPreCheck> GatherScriptPreChecks(const Config &config, const CTxMemPool &pool,
+                                                  const std::vector<CTransactionRef> &txs) {
+    // Skip what acceptance would reject before running scripts, so that pre-checks cannot be made to cost more; do
+    // as little as possible under the locks, which the message handler needs for every transaction.
+    std::vector<ScriptPreCheck> checks;
+    checks.reserve(txs.size());
+    for (const CTransactionRef &tx : txs) {
+        if (CValidationState state; CheckRegularTransaction(*tx, state)) {
+            checks.push_back({tx, {}, 0});
+        }
+    }
+    uint32_t flags;
+    {
+        LOCK2(cs_main, pool.cs);
+        flags = GetMemPoolScriptFlags(config.GetChainParams().GetConsensus(), ::ChainActive().Tip(), nullptr);
+        const CCoinsViewMemPool viewMemPool(pcoinsTip.get(), pool);
+        for (ScriptPreCheck &check : checks) {
+            if (pool.exists(check.tx->GetId())) {
+                continue;
+            }
+            check.coins.reserve(check.tx->vin.size());
+            for (const CTxIn &txin : check.tx->vin) {
+                // Like AcceptToMemoryPool, leave the coins cache as it was: the transaction may well be rejected.
+                const bool cached = pcoinsTip->HaveCoinInCache(txin.prevout);
+                Coin coin;
+                const bool found = viewMemPool.GetCoin(txin.prevout, coin) && !coin.IsSpent();
+                if (!cached) {
+                    pcoinsTip->Uncache(txin.prevout);
+                }
+                if (!found) {
+                    break;
+                }
+                check.coins.push_back(std::move(coin));
+            }
+        }
+    }
+    for (ScriptPreCheck &check : checks) {
+        check.flags = flags;
+    }
+    const auto skip = [&](const ScriptPreCheck &check) {
+        if (check.coins.size() != check.tx->vin.size()) {
+            return true; // in the mempool already, or an input is not available
+        }
+        if (std::string reason; fRequireStandard && !IsStandardTx(*check.tx, reason, flags)) {
+            return true;
+        }
+        Amount inputs = Amount::zero();
+        for (const Coin &coin : check.coins) {
+            inputs += coin.GetTxOut().nValue;
+        }
+        return inputs - check.tx->GetValueOut() < minRelayTxFee.GetFee(check.tx->GetTotalSize());
+    };
+    checks.erase(std::remove_if(checks.begin(), checks.end(), skip), checks.end());
+    return checks;
+}
+
+void RunScriptPreCheck(const ScriptPreCheck &check) {
+    CCoinsView dummy;
+    CCoinsViewCache view(&dummy);
+    for (size_t i = 0; i < check.coins.size(); ++i) {
+        view.AddCoin(check.tx->vin[i].prevout, check.coins[i], true);
+    }
+    const PQAdmissionScope pqAdmissionScope;
+    PrecomputedTransactionData txdata;
+    TxSigCheckLimiter txLimitSigChecks;
+    for (const ScriptExecutionContext &context : ScriptExecutionContext::createForAllInputs(*check.tx, view)) {
+        if (!txdata.populated) {
+            txdata.PopulateFromContext(context);
+        }
+        CScriptCheck scriptCheck(context, check.flags, true, txdata, &txLimitSigChecks);
+        if (!scriptCheck()) {
+            return;
+        }
+    }
 }
 
 /**

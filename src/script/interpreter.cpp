@@ -2638,6 +2638,11 @@ bool BaseSignatureChecker::VerifySignature(const ByteView &vchSig,
     }
 }
 
+bool BaseSignatureChecker::VerifyPQSignature(const ByteView &rawSig, const ByteView &pubkey,
+                                             const uint256 &sighash) const {
+    return pqsig::Verify(pubkey, rawSig, sighash);
+}
+
 ContextOptSignatureChecker::~ContextOptSignatureChecker() {}
 
 bool TransactionSignatureChecker::CheckSig(const ByteView &vchSigIn, const std::vector<uint8_t> &vchPubKey,
@@ -2677,7 +2682,7 @@ bool TransactionSignatureChecker::CheckPQSig(const ByteView &vchSigIn, const Byt
                                                         flags | SCRIPT_ENABLE_SIGHASH_FORKID);
     if (pnBytesHashed) *pnBytesHashed = bytesHashed;
 
-    return pqsig::Verify(vchPubKey, rawSig, sighash);
+    return VerifyPQSignature(rawSig, vchPubKey, sighash);
 }
 
 bool TransactionSignatureChecker::CheckLockTime(const CScriptNum &nLockTime) const {

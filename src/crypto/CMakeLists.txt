@@ -51,6 +51,40 @@ target_compile_definitions(mldsa44
 set_target_properties(mldsa44 PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
 target_link_libraries(crypto mldsa44)
 
+# XCHAIN: a second ML-DSA-44 build with mldsa-native's x86-64 AVX2 backend (arithmetic and Keccak), used only to
+# verify signatures of transactions entering the mempool; blocks are always verified with the portable build above
+# (decision D12, revised 2026-11-04). pqsig.cpp calls it only on CPUs with AVX2, BMI2 and POPCNT.
+set(MLDSA_AVX2_FLAGS -mavx2 -mbmi2 -mpopcnt)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+	include(CheckCSourceCompiles)
+	string(JOIN " " CMAKE_REQUIRED_FLAGS ${MLDSA_AVX2_FLAGS})
+	check_c_source_compiles("
+		#include <immintrin.h>
+		int main() {
+			__m256i l = _mm256_set1_epi32(0);
+			return _mm256_extract_epi32(l, 7) + (int)_pext_u64(3, 1) + _mm_popcnt_u32(1);
+		}
+	" ENABLE_MLDSA_AVX2)
+	unset(CMAKE_REQUIRED_FLAGS)
+endif()
+if(ENABLE_MLDSA_AVX2)
+	enable_language(ASM)
+	add_library(mldsa44_avx2 mldsa/mldsa_native.c mldsa/mldsa_native_asm.S)
+	target_include_directories(mldsa44_avx2 PRIVATE mldsa)
+	target_compile_definitions(mldsa44_avx2
+		PRIVATE
+			MLD_CONFIG_PARAMETER_SET=44
+			MLD_CONFIG_NAMESPACE_PREFIX=xc_mldsa44_avx2
+			MLD_CONFIG_USE_NATIVE_BACKEND_ARITH
+			MLD_CONFIG_USE_NATIVE_BACKEND_FIPS202
+		PUBLIC
+			ENABLE_MLDSA_AVX2
+	)
+	target_compile_options(mldsa44_avx2 PRIVATE ${MLDSA_AVX2_FLAGS})
+	set_target_properties(mldsa44_avx2 PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
+	target_link_libraries(crypto mldsa44_avx2)
+endif()
+
 # Crypto libraries requiring hardware features
 macro(add_crypto_library NAME)
 	add_library(${NAME} ${ARGN})

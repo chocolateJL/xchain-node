@@ -80,6 +80,21 @@ bool IsValidPubKeyEncoding(ByteView pubkey);
  */
 bool Verify(ByteView pubkey, ByteView rawSig, const uint256 &digest);
 
+/**
+ * Verify like Verify(), with the AVX2 build of ML-DSA when InitAdmissionVerifier() enabled it. For mempool
+ * acceptance only: block validation uses Verify(), the portable build, alone (decision D12).
+ */
+bool VerifyForAdmission(ByteView pubkey, ByteView rawSig, const uint256 &digest);
+
+/** Let VerifyForAdmission() use the AVX2 build if `allowAVX2`, it was compiled in and the CPU supports it. */
+bool InitAdmissionVerifier(bool allowAVX2);
+
+/** True while VerifyForAdmission() uses the AVX2 build. */
+bool AdmissionUsesAVX2();
+
+/** Stop VerifyForAdmission() from using the AVX2 build (after it disagreed with the portable build). */
+void DisableAdmissionAVX2();
+
 /** Derive a key pair from a 32-byte seed (ML-DSA.KeyGen_internal). `pubkey` gets the algorithm identifier. */
 bool KeyPairFromSeed(const std::array<uint8_t, SEED_SIZE> &seed, std::vector<uint8_t> &pubkey, SecretKey &secret);
 

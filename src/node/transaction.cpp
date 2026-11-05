@@ -29,6 +29,12 @@ TxId BroadcastTransaction(const Config &config, const CTransactionRef tx,
 
     MempoolAcceptExtraInfo info;
 
+    // XCHAIN: run the scripts before taking cs_main for acceptance, so that RPC threads verify signatures in parallel
+    // and acceptance finds them in the signature cache.
+    for (const ScriptPreCheck &check : GatherScriptPreChecks(config, g_mempool, {tx})) {
+        RunScriptPreCheck(check);
+    }
+
     { // cs_main scope
         LOCK(cs_main);
         CCoinsViewCache &view = *pcoinsTip;

@@ -737,6 +737,9 @@ public:
     // Time (in microseconds) of message receipt.
     int64_t nTime;
 
+    // XCHAIN: a tx message already handed to the script pre-checkers while it waited in the process queue.
+    bool fPreChecked{false};
+
     CNetMessage(const CMessageHeader::MessageMagic &pchMessageStartIn,
                 int nTypeIn, int nVersionIn)
         : hdrbuf(nTypeIn, nVersionIn), hdr(pchMessageStartIn),

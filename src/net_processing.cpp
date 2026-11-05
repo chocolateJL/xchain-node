@@ -41,16 +41,21 @@
 #include <util/moneystr.h>
 #include <util/strencodings.h>
 #include <util/system.h>
+#include <util/threadnames.h>
 #include <validation.h>
 #include <validationinterface.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <deque>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <typeinfo>
 
@@ -113,6 +118,155 @@ static constexpr auto GETDATA_TX_INTERVAL = std::chrono::seconds{60}; // 1 minut
  * P2PQH transactions per second, more than one round trip of new transactions at that rate.
  */
 static constexpr uint64_t MAX_CMPCTBLOCK_PREFILL_BYTES = 8'000'000;
+
+namespace {
+/**
+ * XCHAIN: time the message handler spends on tx messages, and how much of it waiting for cs_main; logged as bench
+ * every TX_TIMES_INTERVAL messages. Only the message handler thread touches it.
+ */
+class TxMessageTimes {
+    static constexpr int64_t TX_TIMES_INTERVAL = 20'000;
+    int64_t count = 0, totalMicros = 0, lockWaitMicros = 0;
+
+public:
+    void AddLockWait(int64_t micros) { lockWaitMicros += micros; }
+
+    void Add(int64_t micros) {
+        totalMicros += micros;
+        if (++count == TX_TIMES_INTERVAL) {
+            LogPrint(BCLog::BENCH, "tx messages: %.1fus each, of which %.1fus waiting for cs_main (%d messages)\n",
+                     double(totalMicros) / count, double(lockWaitMicros) / count, count);
+            count = totalMicros = lockWaitMicros = 0;
+        }
+    }
+};
+TxMessageTimes g_txMessageTimes;
+
+/**
+ * XCHAIN: threads that run the scripts of tx messages still waiting in peers' process queues. When the message
+ * handler gets to such a transaction, AcceptToMemoryPool finds its signatures in the signature cache, so the
+ * verification moves off the message handler, which accepts transactions one at a time under cs_main.
+ */
+class TxPreChecker {
+    //! Most queued messages (raw transactions); further ones are not pre-checked.
+    static constexpr size_t MAX_QUEUED = 4'000;
+    //! Transactions whose coins a thread gathers under one cs_main lock.
+    static constexpr size_t BATCH = 32;
+
+    std::mutex mutex;
+    std::condition_variable cond;
+    std::deque<std::vector<uint8_t>> queue;
+    bool running = false;
+    std::vector<std::thread> threads;
+
+    void Run(int n) {
+        util::ThreadRename(strprintf("txprecheck.%d", n));
+        while (true) {
+            std::vector<std::vector<uint8_t>> batch;
+            {
+                std::unique_lock lock(mutex);
+                cond.wait(lock, [this] { return !running || !queue.empty(); });
+                if (!running) {
+                    return;
+                }
+                while (!queue.empty() && batch.size() < BATCH) {
+                    batch.push_back(std::move(queue.front()));
+                    queue.pop_front();
+                }
+            }
+            std::vector<CTransactionRef> txs;
+            txs.reserve(batch.size());
+            for (const std::vector<uint8_t> &bytes : batch) {
+                try {
+                    CDataStream stream(bytes, SER_NETWORK, PROTOCOL_VERSION);
+                    CTransactionRef tx;
+                    stream >> tx;
+                    txs.push_back(std::move(tx));
+                } catch (const std::exception &) {
+                    // The message handler will deal with it.
+                }
+            }
+            for (const ScriptPreCheck &check : GatherScriptPreChecks(GetConfig(), g_mempool, txs)) {
+                RunScriptPreCheck(check);
+            }
+        }
+    }
+
+public:
+    void Start(int n) {
+        std::unique_lock lock(mutex);
+        assert(!running && threads.empty());
+        running = true;
+        for (int i = 0; i < n; ++i) {
+            threads.emplace_back([this, i] { Run(i); });
+        }
+    }
+
+    void Stop() {
+        {
+            std::unique_lock lock(mutex);
+            running = false;
+            queue.clear();
+        }
+        cond.notify_all();
+        for (std::thread &thread : threads) {
+            thread.join();
+        }
+        threads.clear();
+    }
+
+    /** Queues a raw transaction; false if the queue is full. */
+    bool Push(std::vector<uint8_t> &&bytes) {
+        {
+            std::unique_lock lock(mutex);
+            if (!running || queue.size() >= MAX_QUEUED) {
+                return false;
+            }
+            queue.push_back(std::move(bytes));
+        }
+        cond.notify_one();
+        return true;
+    }
+};
+TxPreChecker g_txPreChecker;
+std::atomic<bool> g_txPreCheckerRunning{false};
+
+/** Hands the tx messages waiting behind the one being processed to the pre-checkers (cs_vProcessMsg held). */
+void QueueTxPreChecks(CNode &node) EXCLUSIVE_LOCKS_REQUIRED(node.cs_vProcessMsg) {
+    // Look a limited way ahead: far enough to keep the pre-checkers ahead of the message handler.
+    static constexpr int MAX_EXAMINED = 256, MAX_QUEUED_PER_CALL = 64;
+    int examined = 0, queued = 0;
+    for (CNetMessage &msg : node.vProcessMsg) {
+        if (++examined > MAX_EXAMINED || queued == MAX_QUEUED_PER_CALL) {
+            break;
+        }
+        if (msg.fPreChecked || msg.hdr.GetCommand() != NetMsgType::TX) {
+            continue;
+        }
+        msg.fPreChecked = true;
+        if (!g_txPreChecker.Push(std::vector<uint8_t>(msg.vRecv.begin(), msg.vRecv.end()))) {
+            break;
+        }
+        ++queued;
+    }
+}
+} // namespace
+
+void StartTxPreCheckers(int threads) {
+    if (threads > 0) {
+        g_txPreChecker.Start(threads);
+        g_txPreCheckerRunning = true;
+    }
+}
+
+void StopTxPreCheckers() {
+    g_txPreCheckerRunning = false;
+    g_txPreChecker.Stop();
+}
+
+int DefaultTxPreCheckThreads() {
+    return std::clamp(GetNumCores() / 4, 1, 4);
+}
 /**
  * Limit to avoid sending big packets. Not used in processing incoming GETDATA
  * for compatibility.
@@ -2921,7 +3075,9 @@ bool PeerLogicValidation::ProcessMessage(const Config &config, const NodeRef &pf
         const CInv inv(MSG_TX, txid);
         pfrom->AddInventoryKnown(inv);
 
+        const int64_t nLockStart = GetTimeMicros();
         LOCK(cs_main);
+        g_txMessageTimes.AddLockWait(GetTimeMicros() - nLockStart);
 
         bool fMissingInputs = false;
         CValidationState state;
@@ -3923,6 +4079,9 @@ bool PeerLogicValidation::ProcessMessages(const Config &config, NodeRef pfrom, s
         if (pfrom->nBlockRelayMsgs > 0) {
             --pfrom->nBlockRelayMsgs;
         }
+        if (g_txPreCheckerRunning && msgs.front().hdr.GetCommand() == NetMsgType::TX) {
+            QueueTxPreChecks(*pfrom);
+        }
         pfrom->nProcessQueueSize -= msgs.front().vRecv.size() + CMessageHeader::HEADER_SIZE;
         pfrom->fPauseRecv = pfrom->nProcessQueueSize > connman->GetReceiveFloodSize();
         fMoreWork = !pfrom->vProcessMsg.empty();
@@ -3976,7 +4135,11 @@ bool PeerLogicValidation::ProcessMessages(const Config &config, NodeRef pfrom, s
     // Process message
     bool fRet = false;
     try {
+        const int64_t nProcessStart = GetTimeMicros();
         fRet = ProcessMessage(config, pfrom, msg_type, vRecv, msg.nTime, interruptMsgProc);
+        if (msg_type == NetMsgType::TX) {
+            g_txMessageTimes.Add(GetTimeMicros() - nProcessStart);
+        }
         if (interruptMsgProc) {
             return false;
         }

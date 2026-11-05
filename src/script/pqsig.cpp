@@ -9,6 +9,13 @@
 #include <mldsa_native.h>
 
 #include <algorithm>
+#include <atomic>
+
+#ifdef ENABLE_MLDSA_AVX2
+// The AVX2 build of mldsa-native (src/crypto/CMakeLists.txt), namespaced xc_mldsa44_avx2.
+extern "C" int xc_mldsa44_avx2_verify(const uint8_t *sig, const uint8_t *m, size_t mlen, const uint8_t *ctx,
+                                      size_t ctxlen, const uint8_t *pk);
+#endif
 
 static_assert(pqsig::RAW_PUBKEY_SIZE == MLDSA_PUBLICKEYBYTES(44));
 static_assert(pqsig::RAW_SIG_SIZE == MLDSA_BYTES(44));
@@ -65,6 +72,45 @@ bool Verify(ByteView pubkey, ByteView rawSig, const uint256 &digest) {
                                      pubkey.data() + 1) == 0;
     }
     return false;
+}
+
+static std::atomic<bool> g_admissionAVX2{false};
+
+bool InitAdmissionVerifier(bool allowAVX2) {
+#ifdef ENABLE_MLDSA_AVX2
+    __builtin_cpu_init();
+    g_admissionAVX2 = allowAVX2 && __builtin_cpu_supports("avx2") && __builtin_cpu_supports("bmi2") &&
+                      __builtin_cpu_supports("popcnt");
+#else
+    g_admissionAVX2 = false;
+#endif
+    return g_admissionAVX2;
+}
+
+bool AdmissionUsesAVX2() {
+    return g_admissionAVX2.load(std::memory_order_relaxed);
+}
+
+void DisableAdmissionAVX2() {
+    g_admissionAVX2 = false;
+}
+
+bool VerifyForAdmission(ByteView pubkey, ByteView rawSig, const uint256 &digest) {
+#ifdef ENABLE_MLDSA_AVX2
+    if (AdmissionUsesAVX2()) {
+        const Algorithm *alg = GetPubKeyAlgorithm(pubkey);
+        if (alg == nullptr || rawSig.size() != alg->rawSigSize) {
+            return false;
+        }
+        switch (alg->id) {
+            case ALG_ML_DSA_44:
+                return xc_mldsa44_avx2_verify(rawSig.data(), digest.begin(), digest.size(), ContextBytes(),
+                                              CONTEXT_SIZE, pubkey.data() + 1) == 0;
+        }
+        return false;
+    }
+#endif
+    return Verify(pubkey, rawSig, digest);
 }
 
 bool KeyPairFromSeed(const std::array<uint8_t, SEED_SIZE> &seed, std::vector<uint8_t> &pubkey, SecretKey &secret) {

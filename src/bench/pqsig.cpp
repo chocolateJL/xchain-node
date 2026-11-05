@@ -111,6 +111,17 @@ static void PQSigVerify(benchmark::State &state) {
     }
 }
 
+/** One ML-DSA-44 verification as on mempool acceptance (the AVX2 build where the CPU has it, decision D12). */
+static void PQSigVerifyAdmission(benchmark::State &state) {
+    const PQFixture f;
+    pqsig::InitAdmissionVerifier(true);
+    BENCHMARK_LOOP {
+        const bool ok = pqsig::VerifyForAdmission(f.pubkey, f.rawSig, f.digest);
+        assert(ok);
+    }
+    pqsig::InitAdmissionVerifier(false);
+}
+
 /** One hedged ML-DSA-44 signature (wallet side). */
 static void PQSigSign(benchmark::State &state) {
     const PQFixture f;
@@ -138,6 +149,7 @@ static void VerifyScriptP2PKH_Schnorr(benchmark::State &state) {
 }
 
 BENCHMARK(PQSigVerify, 5000);
+BENCHMARK(PQSigVerifyAdmission, 5000);
 BENCHMARK(PQSigSign, 1000);
 BENCHMARK(VerifyScriptP2PQH, 5000);
 BENCHMARK(VerifyScriptP2PKH_ECDSA, 5000);

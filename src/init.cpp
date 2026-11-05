@@ -48,6 +48,7 @@
 #include <rpc/util.h>
 #include <scheduler.h>
 #include <script/scriptcache.h>
+#include <script/pqsig.h>
 #include <script/sigcache.h>
 #include <script/standard.h>
 #include <shutdown.h>
@@ -261,6 +262,8 @@ void Shutdown(NodeContext &node) {
     }
 
     StopScriptCheckWorkerThreads();
+    StopTxPreCheckers();
+    StopPQAdmissionChecker();
 
     // After the threads that potentially access these pointers have been
     // stopped, destruct and reset all to nullptr.
@@ -555,6 +558,12 @@ void SetupServerArgs() {
                   "= auto, <0 = leave that many cores free, default: %d)",
                   MAX_ADDITIONAL_SCRIPTCHECK_THREADS + 1,
                   DEFAULT_SCRIPTCHECK_THREADS),
+        ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    gArgs.AddArg(
+        "-txprecheckthreads=<n>",
+        strprintf("Set the number of threads that verify the scripts of transactions waiting to enter the mempool, "
+                  "ahead of acceptance (0 to %d, 0 = none, default: %d on this machine)",
+                  MAX_TX_PRECHECK_THREADS, DefaultTxPreCheckThreads()),
         ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     gArgs.AddArg("-parkdeepreorg",
                  strprintf("If connecting a new block would require rewinding "
@@ -963,6 +972,12 @@ void SetupServerArgs() {
         strprintf("Limit size of signature cache to <n> MiB (0 to %d, default: %d)",
                   MAX_MAX_SIG_CACHE_SIZE, DEFAULT_MAX_SIG_CACHE_SIZE),
         ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
+    gArgs.AddArg(
+        "-pqadmitavx2",
+        strprintf("Verify ML-DSA signatures of transactions entering the mempool with the AVX2 build, if the CPU "
+                  "supports it; blocks are always verified with the portable build (default: %d)",
+                  DEFAULT_PQ_ADMIT_AVX2),
+        ArgsManager::ALLOW_BOOL | ArgsManager::DEBUG_ONLY, OptionsCategory::DEBUG_TEST);
     gArgs.AddArg(
         "-maxscriptcachesize=<n>",
         strprintf("Limit size of script cache to <n> MiB (0 to %d, default: %d)",
@@ -2213,6 +2228,25 @@ bool AppInitMain(Config &config, RPCServer &rpcServer,
 
     InitSignatureCache();
     InitScriptExecutionCache();
+    if (pqsig::InitAdmissionVerifier(gArgs.GetBoolArg("-pqadmitavx2", DEFAULT_PQ_ADMIT_AVX2))) {
+        LogPrintf("ML-DSA signatures of transactions entering the mempool are verified with the AVX2 build, then "
+                  "again with the portable build in the background\n");
+        StartPQAdmissionChecker(
+            [](std::vector<std::pair<ScriptCacheKey, int>> &&confirmed) {
+                LOCK(cs_main);
+                for (const auto &[key, nSigChecks] : confirmed) {
+                    AddKeyInScriptCache(key, nSigChecks);
+                }
+            },
+            [](const TxId &txid) {
+                // The portable build rejects a signature the AVX2 build accepted: drop the transaction, or block
+                // templates would fail.
+                LOCK(cs_main);
+                if (const CTransactionRef tx = g_mempool.get(txid)) {
+                    g_mempool.removeRecursive(*tx);
+                }
+            });
+    }
 
     int script_threads = gArgs.GetArg("-par", DEFAULT_SCRIPTCHECK_THREADS);
     if (script_threads <= 0) {
@@ -2236,6 +2270,11 @@ bool AppInitMain(Config &config, RPCServer &rpcServer,
     if (script_threads >= 1) {
         StartScriptCheckWorkerThreads(script_threads);
     }
+
+    const int txPreCheckThreads =
+        std::clamp<int64_t>(gArgs.GetArg("-txprecheckthreads", DefaultTxPreCheckThreads()), 0, MAX_TX_PRECHECK_THREADS);
+    LogPrintf("Scripts of incoming transactions are pre-checked by %d threads\n", txPreCheckThreads);
+    StartTxPreCheckers(txPreCheckThreads);
 
     assert(!node.scheduler);
     node.scheduler = std::make_unique<CScheduler>();

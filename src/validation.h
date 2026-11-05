@@ -432,6 +432,25 @@ AcceptToMemoryPoolWithTime(const Config &config, CTxMemPool &pool,
                            bool test_accept = false, MempoolAcceptExtraInfo *pinfo = nullptr)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
+/**
+ * XCHAIN: a transaction's spent coins and script flags, gathered under cs_main so that its scripts can be run without
+ * it (RunScriptPreCheck). Running them only fills the signature cache for AcceptToMemoryPool, which then finds its
+ * signature checks done; acceptance itself is unchanged, so a pre-check may come too late or not at all.
+ */
+struct ScriptPreCheck {
+    CTransactionRef tx;
+    std::vector<Coin> coins;
+    uint32_t flags;
+};
+
+/** Gathers pre-checks for the transactions that are not in the mempool and whose inputs are all available. */
+std::vector<ScriptPreCheck> GatherScriptPreChecks(const Config &config, const CTxMemPool &pool,
+                                                  const std::vector<CTransactionRef> &txs)
+    LOCKS_EXCLUDED(cs_main);
+
+/** Runs a pre-check's input scripts without locks, caching the signatures that verify (as for mempool acceptance). */
+void RunScriptPreCheck(const ScriptPreCheck &check);
+
 /** Convert CValidationState to a human-readable message for logging */
 std::string FormatStateMessage(const CValidationState &state);
 

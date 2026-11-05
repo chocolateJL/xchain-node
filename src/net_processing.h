@@ -280,3 +280,14 @@ struct CNodeStateStats {
 bool GetNodeStateStats(NodeId nodeid, CNodeStateStats &stats);
 /** Increase a node's misbehavior score. */
 void Misbehaving(NodeId nodeid, int howmuch, const std::string &reason = "");
+
+/**
+ * XCHAIN: start `threads` threads that run the scripts of tx messages waiting in peers' process queues, so that their
+ * signatures are cached when the message handler accepts them (see GatherScriptPreChecks); 0 starts none.
+ */
+void StartTxPreCheckers(int threads);
+void StopTxPreCheckers();
+/** Most -txprecheckthreads. */
+static constexpr int MAX_TX_PRECHECK_THREADS = 16;
+/** Default for -txprecheckthreads: a quarter of the cores, at least 1 and at most 4. */
+int DefaultTxPreCheckThreads();

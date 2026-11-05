@@ -703,4 +703,56 @@ BOOST_AUTO_TEST_CASE(scriptcache_values) {
     CHECK_CACHE_HAS(key1A, 42);
 }
 
+// XCHAIN: script pre-checks (GatherScriptPreChecks / RunScriptPreCheck) gather only what acceptance would, leave the
+// coins cache as it was, and do not change what AcceptToMemoryPool accepts.
+BOOST_FIXTURE_TEST_CASE(script_pre_check, TxValidationCacheSetup) {
+    const CScript scriptPubKey = CScript() << coinbaseKey.GetPubKey() << OP_CHECKSIG;
+    const auto spend = [&](const CTransactionRef &from, bool badSig, Amount fee = CENT) {
+        CMutableTransaction tx;
+        tx.nVersion = 1;
+        tx.vin.resize(1);
+        tx.vin[0].prevout = COutPoint(from->GetId(), 0);
+        tx.vout.resize(1);
+        tx.vout[0].nValue = from->vout[0].nValue - fee;
+        tx.vout[0].scriptPubKey = scriptPubKey;
+        std::vector<uint8_t> vchSig;
+        const uint256 hash = SignatureHash(scriptPubKey, ScriptExecutionContext{0, from->vout[0], tx},
+                                           SigHashType().withFork(), nullptr, STANDARD_SCRIPT_VERIFY_FLAGS)
+                                 .signatureHash;
+        BOOST_REQUIRE(coinbaseKey.SignSchnorr(hash, vchSig));
+        if (badSig) {
+            vchSig[10] ^= 1;
+        }
+        vchSig.push_back(uint8_t(SIGHASH_ALL | SIGHASH_FORKID));
+        tx.vin[0].scriptSig << vchSig;
+        return MakeTransactionRef(tx);
+    };
+    const CTransactionRef good = spend(m_coinbase_txns[0], false);
+    const CTransactionRef bad = spend(m_coinbase_txns[1], true);
+    const CTransactionRef child = spend(good, false); // its input is not available until `good` is accepted
+    const CTransactionRef noFee = spend(m_coinbase_txns[2], false, Amount::zero()); // acceptance rejects it first
+
+    const COutPoint &prevout = good->vin[0].prevout;
+    const bool cached = WITH_LOCK(cs_main, return pcoinsTip->HaveCoinInCache(prevout));
+    std::vector<ScriptPreCheck> checks = GatherScriptPreChecks(GetConfig(), g_mempool, {good, bad, child, noFee});
+    BOOST_CHECK_EQUAL(WITH_LOCK(cs_main, return pcoinsTip->HaveCoinInCache(prevout)), cached);
+    BOOST_REQUIRE_EQUAL(checks.size(), 2u);
+    BOOST_CHECK(checks[0].tx == good && checks[1].tx == bad);
+    BOOST_REQUIRE_EQUAL(checks[0].coins.size(), 1u);
+    BOOST_CHECK(checks[0].coins[0].GetTxOut() == m_coinbase_txns[0]->vout[0]);
+
+    for (const ScriptPreCheck &check : checks) {
+        RunScriptPreCheck(check);
+    }
+    BOOST_CHECK(ToMemPool(CMutableTransaction(*good)));
+    BOOST_CHECK(!ToMemPool(CMutableTransaction(*bad)));
+
+    // Now `good` is in the mempool (nothing to pre-check) and `child` can be pre-checked from the mempool's coins.
+    checks = GatherScriptPreChecks(GetConfig(), g_mempool, {good, child});
+    BOOST_REQUIRE_EQUAL(checks.size(), 1u);
+    BOOST_CHECK(checks[0].tx == child);
+    RunScriptPreCheck(checks[0]);
+    BOOST_CHECK(ToMemPool(CMutableTransaction(*child)));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

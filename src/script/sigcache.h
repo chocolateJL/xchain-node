@@ -6,7 +6,13 @@
 
 #pragma once
 
+#include <primitives/txid.h>
 #include <script/interpreter.h>
+#include <script/scriptcache.h>
+
+#include <functional>
+#include <utility>
+#include <vector>
 
 // DoS prevention: limit cache size to 32MB (over 1000000 entries on 64-bit
 // systems). Due to how we count cache size, actual memory usage is slightly
@@ -41,6 +47,7 @@ private:
     bool store;
 
     bool IsCached(const ByteView &vchSig, const CPubKey &vchPubKey, const uint256 &sighash) const;
+    bool IsPQCached(const ByteView &rawSig, const ByteView &pubkey, const uint256 &sighash) const;
 
 public:
     CachingTransactionSignatureChecker(const ScriptExecutionContext &contextIn, bool storeIn,
@@ -51,6 +58,10 @@ public:
     bool VerifySignature(const ByteView &vchSig,
                          const CPubKey &vchPubKey,
                          const uint256 &sighash) const override;
+
+    // XCHAIN: ML-DSA verification costs more than ECDSA; without the cache a transaction's PQ signatures are verified
+    // twice on mempool acceptance (standard, then consensus flags).
+    bool VerifyPQSignature(const ByteView &rawSig, const ByteView &pubkey, const uint256 &sighash) const override;
 
     friend class TestCachingTransactionSignatureChecker;
 };
@@ -63,3 +74,39 @@ public:
  * this function takes no locks.
  */
 void InitSignatureCache();
+
+/** Default for -pqadmitavx2: verify PQ signatures with the AVX2 build on mempool acceptance (see pqsig.h). */
+static constexpr bool DEFAULT_PQ_ADMIT_AVX2 = true;
+
+/**
+ * While a PQAdmissionScope is alive on a thread (mempool acceptance), CachingTransactionSignatureChecker verifies PQ
+ * signatures with pqsig::VerifyForAdmission. When that is the AVX2 build, its results go only into an admission part
+ * of the signature cache, and each verified signature is queued for the portable build; only the portable build's
+ * results go into the part that block validation reads (decision D12). A signature the AVX2 build rejects is
+ * checked again with the portable build, so the AVX2 build never makes us reject a valid transaction.
+ */
+class PQAdmissionScope {
+public:
+    PQAdmissionScope();
+    ~PQAdmissionScope();
+    PQAdmissionScope(const PQAdmissionScope &) = delete;
+    PQAdmissionScope &operator=(const PQAdmissionScope &) = delete;
+
+    /** True if a signature check in this scope relied on an AVX2 result not yet confirmed by the portable build. */
+    bool UsedAVX2Results() const;
+
+    /**
+     * For an accepted transaction: queue the AVX2 results this scope relied on for the portable build. Once it
+     * confirms them all, the transaction's script cache entry (`scriptKey`, `nSigChecks`) is added too.
+     */
+    void QueueConfirmation(const CTransaction &tx, const ScriptCacheKey &scriptKey, int nSigChecks) const;
+};
+
+/**
+ * Start the thread that verifies the signatures queued by PQAdmissionScope with the portable build. It hands script
+ * cache entries for confirmed transactions to `onConfirmed` in batches (which must take cs_main to add them). If the
+ * portable build rejects a signature, the AVX2 build is disabled and `onMismatch` is called with the transaction's id.
+ */
+void StartPQAdmissionChecker(std::function<void(std::vector<std::pair<ScriptCacheKey, int>> &&)> onConfirmed,
+                             std::function<void(const TxId &)> onMismatch);
+void StopPQAdmissionChecker();

@@ -62,6 +62,9 @@ class BaseSignatureChecker {
 public:
     virtual bool VerifySignature(const ByteView &vchSig, const CPubKey &vchPubKey, const uint256 &sighash) const;
 
+    /** Verify a raw PQ signature (without the sighash byte) over `sighash` with the algorithm `pubkey` names. */
+    virtual bool VerifyPQSignature(const ByteView &rawSig, const ByteView &pubkey, const uint256 &sighash) const;
+
     virtual bool CheckSig(const ByteView &vchSigIn, const std::vector<uint8_t> &vchPubKey,
                           const ByteView &scriptCode, uint32_t flags, size_t *pnBytesHashed) const {
         return false;
