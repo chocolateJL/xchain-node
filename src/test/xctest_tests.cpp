@@ -109,6 +109,10 @@ BOOST_AUTO_TEST_CASE(xctest_params) {
     BOOST_CHECK_EQUAL(consensus.nPowTargetSpacing, 120);
     BOOST_CHECK_EQUAL(consensus.pqSigHeight, 0);
     BOOST_CHECK_EQUAL(consensus.nDefaultConsensusBlockSize, 8'000'000u);
+    // D22: miners fill blocks by default (ABLA hardly grows with half-full blocks, D20); same on the devnet.
+    BOOST_CHECK_EQUAL(consensus.nDefaultGeneratedBlockSizePercent, 100.0);
+    BOOST_CHECK_EQUAL(CreateChainParams(CBaseChainParams::XCPRIV)->GetConsensus().nDefaultGeneratedBlockSizePercent,
+                      100.0);
     BOOST_CHECK(!consensus.fPowNoRetargeting);
     BOOST_REQUIRE(consensus.asertAnchorParams);
     BOOST_CHECK_EQUAL(consensus.asertAnchorParams->nHeight, 0);

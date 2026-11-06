@@ -1302,7 +1302,8 @@ public:
         consensus.upgrade2027ActivationTime = std::numeric_limits<int64_t>::max();
 
         consensus.nDefaultConsensusBlockSize = DEFAULT_CONSENSUS_BLOCK_SIZE;
-        consensus.nDefaultGeneratedBlockSizePercent = 50.0;
+        // Decision D22: miners fill blocks up to the limit by default.
+        consensus.nDefaultGeneratedBlockSizePercent = 100.0;
         assert(consensus.GetDefaultGeneratedBlockSizeBytes() <= consensus.nDefaultConsensusBlockSize);
         consensus.ablaConfig = abla::Config::MakeDefault(consensus.nDefaultConsensusBlockSize, /* fixedSize = */ false);
         assert(abla::State(consensus.ablaConfig, 0).GetBlockSizeLimit() == consensus.nDefaultConsensusBlockSize);
@@ -1409,7 +1410,9 @@ public:
 
         // Decision D16: 8 MB floor; ABLA still grows the limit with sustained demand.
         consensus.nDefaultConsensusBlockSize = 8'000'000;
-        consensus.nDefaultGeneratedBlockSizePercent = 50.0;
+        // Decision D22: miners fill blocks up to the limit by default. With half-full blocks ABLA hardly grows the
+        // limit (D20, spec/abla-calibration.md), and fees would rise while space is left unused.
+        consensus.nDefaultGeneratedBlockSizePercent = 100.0;
         assert(consensus.GetDefaultGeneratedBlockSizeBytes() <= consensus.nDefaultConsensusBlockSize);
         consensus.ablaConfig = abla::Config::MakeDefault(consensus.nDefaultConsensusBlockSize, /* fixedSize = */ false);
         assert(abla::State(consensus.ablaConfig, 0).GetBlockSizeLimit() == consensus.nDefaultConsensusBlockSize);
