@@ -1773,7 +1773,7 @@ static UniValue getchaintips(const Config &config,
 
 UniValue::Object MempoolInfoToJSON(const Config &config, const CTxMemPool &pool) {
     UniValue::Object ret;
-    ret.reserve(10);
+    ret.reserve(11);
     ret.emplace_back("loaded", pool.IsLoaded());
     ret.emplace_back("size", pool.size());
     ret.emplace_back("bytes", pool.GetTotalTxSize());
@@ -1785,6 +1785,7 @@ UniValue::Object MempoolInfoToJSON(const Config &config, const CTxMemPool &pool)
     ret.emplace_back("permitbaremultisig", ::fIsBareMultisigStd);
     ret.emplace_back("maxdatacarriersize", ::nMaxDatacarrierBytes);
     ret.emplace_back("total_fee", ValueFromAmount(pool.GetTotalFee()));
+    ret.emplace_back("accepted", pool.GetAcceptedTotal());
     return ret;
 }
 
@@ -1814,6 +1815,8 @@ static UniValue getmempoolinfo(const Config &config,
             "  \"permitbaremultisig\": true|false (boolean) True if the mempool accepts transactions with bare multisig outputs\n"
             "  \"maxdatacarriersize\": xxxxx, (numeric) Maximum total byte size of OP_RETURN scripts for any single mempool tx\n"
             "  \"total_fee\": xxxxx,          (numeric) Total fees for the mempool in " + CURRENCY_UNIT + ", ignoring modified fees through prioritisetransaction\n"
+            "  \"accepted\": xxxxx,           (numeric) Transactions accepted into the mempool since the node started\n"
+            "                               (including those reloaded from mempool.dat or re-added after a reorg)\n"
             "}\n"
             "\nExamples:\n" +
             HelpExampleCli("getmempoolinfo", "") +

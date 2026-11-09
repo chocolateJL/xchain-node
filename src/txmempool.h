@@ -23,6 +23,7 @@
 #include <boost/multi_index_container.hpp>
 #include <boost/signals2/signal.hpp>
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <optional>
@@ -300,6 +301,8 @@ private:
     uint32_t nCheckFrequency GUARDED_BY(cs);
     //! Used by getblocktemplate to trigger CreateNewBlock() invocation
     unsigned int nTransactionsUpdated;
+    //! Transactions AcceptToMemoryPool added since the node started (getmempoolinfo "accepted")
+    std::atomic<uint64_t> nAcceptedTotal{0};
 
     //! sum of all mempool tx's sizes.
     size_t totalTxSize GUARDED_BY(cs);
@@ -553,6 +556,8 @@ public:
     bool isSpent(const COutPoint &outpoint) const;
     unsigned int GetTransactionsUpdated() const;
     void AddTransactionsUpdated(unsigned int n);
+    uint64_t GetAcceptedTotal() const { return nAcceptedTotal.load(std::memory_order_relaxed); }
+    void CountAccepted() { nAcceptedTotal.fetch_add(1, std::memory_order_relaxed); }
     /**
      * Check that none of this transactions inputs are in the mempool, and thus
      * the tx is not dependent on other mempool transactions to be included in a

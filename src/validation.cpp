@@ -935,6 +935,7 @@ AcceptToMemoryPoolWorker(const Config &config, CTxMemPool &pool,
             GetMainSignals().BadDSProofsDetectedFromNodeIds(badProofNodeIds); // punish peer(s)
     }
 
+    pool.CountAccepted();
     g_admissionTimes.Add(nTimeStart, nTimeScripts, nTimeScriptsDone, nTimeConsensus, nTimeConsensusDone,
                          GetTimeMicros());
     return true;

@@ -94,7 +94,13 @@ static double GetNetworkHashPS(int lookup, int height) EXCLUSIVE_LOCKS_REQUIRED(
     arith_uint256 workDiff = pb->nChainWork - pb0->nChainWork;
     int64_t timeDiff = maxTime - minTime;
 
-    return workDiff.getdouble() / timeDiff;
+    double hashes = workDiff.getdouble();
+    if (::Params().GetConsensus().powAlgorithm == Consensus::Params::PowAlgorithm::RANDOMX) {
+        // XCHAIN: chain work counts 2^256 / (target + 1) per block, but a RandomX hash meets the target when shifted
+        // right by TARGET_SHIFT bits, so a block takes 2^TARGET_SHIFT times fewer hashes.
+        hashes = std::ldexp(hashes, -int(randomx_pow::TARGET_SHIFT));
+    }
+    return hashes / timeDiff;
 }
 
 static UniValue getnetworkhashps(const Config &config,
@@ -102,7 +108,8 @@ static UniValue getnetworkhashps(const Config &config,
     if (request.fHelp || request.params.size() > 2) {
         throw std::runtime_error(RPCHelpMan{
             "getnetworkhashps",
-            "\nReturns the estimated network hashes per second based on the last n blocks.\n",
+            "\nReturns the estimated network hashes per second based on the last n blocks.\n"
+            "On RandomX chains these are RandomX hashes.\n",
             {
                 {"nblocks", RPCArg::Type::NUM, /* opt */ true, /* default_val */ "120",
                  "The number of blocks to use for the network hashrate estimation."},
@@ -754,7 +761,15 @@ static UniValue getblocktemplatecommon(bool fLight, const Config &config, const 
         // XCHAIN: miners hash the 80-byte header with RandomX under this seed; the RandomX hash shifted right by
         // rxtargetshift bits must not exceed "target".
         result.emplace_back("powalgorithm", "randomx");
+        const int seedHeight = randomx_pow::SeedHeight(pindexPrev->nHeight + 1);
         result.emplace_back("rxseedhash", randomx_pow::SeedHash(pindexPrev).GetHex());
+        result.emplace_back("rxseedheight", seedHeight);
+        // The next epoch's seed, once its block is in the chain, so that miners can prepare it before the switch.
+        const int nextSeedHeight = seedHeight + randomx_pow::SEED_EPOCH;
+        if (nextSeedHeight <= pindexPrev->nHeight) {
+            result.emplace_back("rxnextseedhash", pindexPrev->GetAncestor(nextSeedHeight)->GetBlockHash().GetHex());
+            result.emplace_back("rxnextseedheight", nextSeedHeight);
+        }
         result.emplace_back("rxtargetshift", int(randomx_pow::TARGET_SHIFT));
     }
 
@@ -862,6 +877,10 @@ static UniValue getblocktemplate(const Config &config, const JSONRPCRequest &req
                 "  \"height\" : n                      (numeric) The height of the next block\n"
                 "  \"powalgorithm\" : \"randomx\",        (string, RandomX chains only) proof-of-work algorithm\n"
                 "  \"rxseedhash\" : \"xxxx\",             (string, RandomX chains only) RandomX key of the next block\n"
+                "  \"rxseedheight\" : n,                (numeric, RandomX chains only) height of the block whose hash is rxseedhash\n"
+                "  \"rxnextseedhash\" : \"xxxx\",         (string, RandomX chains only) key of the next seed epoch, once its\n"
+                "                                     block is in the chain\n"
+                "  \"rxnextseedheight\" : n,            (numeric, RandomX chains only) height of that block\n"
                 "  \"rxtargetshift\" : n                (numeric, RandomX chains only) RandomX hash >> n must be <= target\n"
                 "}\n"
             },

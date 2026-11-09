@@ -71,8 +71,10 @@ class PQSigTest(BitcoinTestFramework):
         dest = PQKey(bytes([8] * 32))
         tx = self.spend(cb, 0, good_sig, p2pqh_script(dest.pubkey))
         assert_equal(len(tx.vin[0].scriptSig), 3740)
+        accepted = node.getmempoolinfo()["accepted"]
         txid = node.sendrawtransaction(ToHex(tx))
         assert txid in node.getrawmempool()
+        assert_equal(node.getmempoolinfo()["accepted"], accepted + 1)
         self.mine([tx])
         assert_equal(node.getrawmempool(), [])
         assert_equal(node.gettxout(txid, 0)["value"] * 100000000, amount - FEE)
@@ -88,6 +90,7 @@ class PQSigTest(BitcoinTestFramework):
 
         assert_raises_rpc_error(-26, "Signature must be zero for failed CHECK(MULTI)SIG operation",
                                 node.sendrawtransaction, ToHex(self.spend(cb, 0, bad_sig, self.spk)))
+        assert_equal(node.getmempoolinfo()["accepted"], accepted + 1)  # rejections are not counted
 
         self.log.info("A wrong-length signature is rejected")
 

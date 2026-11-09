@@ -8,6 +8,7 @@
 #include <cashaddrenc.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <coins.h>
 #include <consensus/activation.h>
 #include <core_io.h>
 #include <key_io.h>
@@ -22,6 +23,7 @@
 #include <script/script_execution_context.h>
 #include <script/sigencoding.h>
 #include <script/standard.h>
+#include <streams.h>
 #include <univalue.h>
 #include <util/strencodings.h>
 
@@ -741,7 +743,9 @@ BOOST_AUTO_TEST_CASE(test_vectors) {
 
 // Differential test against the SDKs: replays a case file from lab/difftest/gen_cases.py
 // (random transactions signed by the Python SDK) and recomputes everything with the node's
-// code. Skipped unless XCHAIN_DIFFTEST names the file.
+// code. Skipped unless XCHAIN_DIFFTEST names the file. The "xchain-difftest-tokens/1" format
+// (gen_cases.py --tokens, regtest_tokens.py) also lists every spent output, CashTokens included,
+// so signature hashes are computed with all coins (token prefixes, SIGHASH_UTXOS).
 BOOST_AUTO_TEST_CASE(difftest) {
     const char *path = std::getenv("XCHAIN_DIFFTEST");
     if (!path) {
@@ -753,8 +757,18 @@ BOOST_AUTO_TEST_CASE(difftest) {
     const std::string text{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
     UniValue doc;
     BOOST_REQUIRE(doc.read(text));
-    BOOST_REQUIRE_EQUAL(doc["format"].get_str(), "xchain-difftest/1");
+    const bool withTokens = doc["format"].get_str() == "xchain-difftest-tokens/1";
+    BOOST_REQUIRE(withTokens || doc["format"].get_str() == "xchain-difftest/1");
     const auto hex = [](const auto &bytes) { return HexStr(bytes.begin(), bytes.end()); };
+    // Contexts that see every spent coin (the tokens format lists them all).
+    const auto fullContexts = [](const CTransaction &t, const std::vector<CTxOut> &coins) {
+        CCoinsView dummy;
+        CCoinsViewCache view(&dummy);
+        for (size_t i = 0; i < t.vin.size(); ++i) {
+            view.AddCoin(t.vin[i].prevout, Coin(coins[i], 1, false), false);
+        }
+        return ScriptExecutionContext::createForAllInputs(t, view);
+    };
 
     std::vector<PQKey> keys;
     for (const UniValue &k : doc["keys"].get_array()) {
@@ -777,6 +791,17 @@ BOOST_AUTO_TEST_CASE(difftest) {
         BOOST_CHECK_EQUAL(tx.GetId().GetHex(), c["txid"].get_str());
         const auto &inputs = c["inputs"].get_array();
         BOOST_REQUIRE_EQUAL(inputs.size(), tx.vin.size());
+        std::vector<CTxOut> spent;
+        if (withTokens) {
+            for (const UniValue &o : c["spent_outputs"].get_array()) {
+                CTxOut out;
+                VectorReader(SER_NETWORK, PROTOCOL_VERSION, ParseHex(o.get_str()), 0) >> out;
+                spent.push_back(std::move(out));
+            }
+            BOOST_REQUIRE_EQUAL(spent.size(), tx.vin.size());
+        }
+        const std::vector<ScriptExecutionContext> contexts =
+            withTokens ? fullContexts(tx, spent) : std::vector<ScriptExecutionContext>{};
         for (unsigned n = 0; n < inputs.size(); ++n) {
             const UniValue &inp = inputs[n];
             const std::string where = strprintf("case %u input %u (%s)", nCases, n, inp["kind"].get_str());
@@ -785,9 +810,17 @@ BOOST_AUTO_TEST_CASE(difftest) {
             const CScript scriptCode(codeBytes.begin(), codeBytes.end());
             const Amount amount = int64_t(std::stoull(inp["amount"].get_str())) * SATOSHI;
             const SigHashType sigHashType(uint32_t(inp["hash_type"].get_int()));
-            const CTxOut coin(amount, scriptCode);
+            const CTxOut coin = withTokens ? spent[n] : CTxOut(amount, scriptCode);
+            BOOST_CHECK_EQUAL(coin.nValue, amount);
+            if (withTokens) {
+                const UniValue &token = inp["token"];
+                BOOST_CHECK_MESSAGE(token.isNull() == !coin.tokenDataPtr, where << ": token data differs");
+                if (!token.isNull() && coin.tokenDataPtr) {
+                    BOOST_CHECK_EQUAL(coin.tokenDataPtr->GetId().ToString(), token["category"].get_str());
+                }
+            }
 
-            const ScriptExecutionContext context{n, coin, tx};
+            const ScriptExecutionContext context = withTokens ? contexts[n] : ScriptExecutionContext{n, coin, tx};
             const uint256 digest =
                 SignatureHash(ByteView(codeBytes.data(), codeBytes.size()), context, sigHashType, nullptr, PQ_FLAGS)
                     .signatureHash;
@@ -803,23 +836,32 @@ BOOST_AUTO_TEST_CASE(difftest) {
             BOOST_CHECK_MESSAGE(pqsig::Verify(key.pubkey, ByteView(sdkSig.data(), pqsig::RAW_SIG_SIZE), digest),
                                 where << ": SDK signature does not verify");
 
-            // P2PQH coins: run the whole script, and check that the amount is committed.
+            // P2PQH coins: run the whole script, and check that the amount (and any token on the coin) is committed.
             if (inp["kind"].get_str() == "p2pqh") {
                 CMutableTransaction signedTx = mtx;
                 signedTx.vin[n].scriptSig = CScript() << sdkSig << key.pubkey;
                 const CTransaction stx(signedTx);
                 const Amount otherAmount = amount > Amount::zero() ? amount - SATOSHI : amount + SATOSHI;
-                for (const Amount &value : {amount, otherAmount}) {
-                    const CTxOut spent(value, scriptCode);
-                    const ScriptExecutionContext ctx{n, spent, stx};
+                std::vector<CTxOut> variants{coin, CTxOut(otherAmount, coin.scriptPubKey, coin.tokenDataPtr)};
+                if (coin.tokenDataPtr) {
+                    variants.emplace_back(amount, coin.scriptPubKey); // the same coin without its token
+                }
+                for (size_t v = 0; v < variants.size(); ++v) {
+                    std::vector<CTxOut> coins = withTokens ? spent : std::vector<CTxOut>{};
+                    if (withTokens) {
+                        coins[n] = variants[v];
+                    }
+                    const ScriptExecutionContext ctx =
+                        withTokens ? fullContexts(stx, coins)[n] : ScriptExecutionContext{n, variants[v], stx};
                     ScriptError err;
                     const bool ok = VerifyScript(stx.vin[n].scriptSig, scriptCode, PQ_FLAGS,
                                                  TransactionSignatureChecker(ctx), &err);
-                    if (value == amount) {
+                    if (v == 0) {
                         BOOST_CHECK_MESSAGE(ok, where << ": script fails: " << ScriptErrorString(err));
                     } else {
                         BOOST_CHECK_MESSAGE(!ok && err == ScriptError::SIG_NULLFAIL,
-                                            where << ": passes with a different amount");
+                                            where << (v == 1 ? ": passes with a different amount"
+                                                             : ": passes without the coin's token"));
                     }
                 }
                 ++nScripts;
