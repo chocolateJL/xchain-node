@@ -31,12 +31,18 @@ TxId BroadcastTransaction(const Config &config, const CTransactionRef tx,
 
     // XCHAIN: run the scripts before taking cs_main for acceptance, so that RPC threads verify signatures in parallel
     // and acceptance finds them in the signature cache.
-    for (const ScriptPreCheck &check : GatherScriptPreChecks(config, g_mempool, {tx})) {
-        RunScriptPreCheck(check);
+    std::vector<std::pair<ScriptPreCheck, int>> passed;
+    for (ScriptPreCheck &check : GatherScriptPreChecks(config, g_mempool, {tx})) {
+        if (const std::optional<int> nSigChecks = RunScriptPreCheck(check)) {
+            passed.emplace_back(std::move(check), *nSigChecks);
+        }
     }
 
     { // cs_main scope
         LOCK(cs_main);
+        for (const auto &[check, nSigChecks] : passed) {
+            AddPassedPreCheck(check, nSigChecks);
+        }
         CCoinsViewCache &view = *pcoinsTip;
         bool fHaveChain = false;
         for (size_t o = 0; !fHaveChain && o < tx->vout.size(); o++) {

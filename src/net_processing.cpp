@@ -186,8 +186,17 @@ class TxPreChecker {
                     // The message handler will deal with it.
                 }
             }
-            for (const ScriptPreCheck &check : GatherScriptPreChecks(GetConfig(), g_mempool, txs)) {
-                RunScriptPreCheck(check);
+            std::vector<std::pair<ScriptPreCheck, int>> passed;
+            for (ScriptPreCheck &check : GatherScriptPreChecks(GetConfig(), g_mempool, txs)) {
+                if (const std::optional<int> nSigChecks = RunScriptPreCheck(check)) {
+                    passed.emplace_back(std::move(check), *nSigChecks);
+                }
+            }
+            if (!passed.empty()) {
+                LOCK(cs_main);
+                for (const auto &[check, nSigChecks] : passed) {
+                    AddPassedPreCheck(check, nSigChecks);
+                }
             }
         }
     }

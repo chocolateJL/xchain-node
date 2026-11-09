@@ -442,8 +442,10 @@ AcceptToMemoryPoolWithTime(const Config &config, CTxMemPool &pool,
 
 /**
  * XCHAIN: a transaction's spent coins and script flags, gathered under cs_main so that its scripts can be run without
- * it (RunScriptPreCheck). Running them only fills the signature cache for AcceptToMemoryPool, which then finds its
- * signature checks done; acceptance itself is unchanged, so a pre-check may come too late or not at all.
+ * it (RunScriptPreCheck). Running them fills the signature cache, and a pre-check that passes is recorded in the script
+ * execution cache under these (standard) flags, so that AcceptToMemoryPool skips its first script pass; the pass with
+ * the next block's flags still runs and finds its signatures cached. Acceptance itself is unchanged, so a pre-check may
+ * come too late or not at all.
  */
 struct ScriptPreCheck {
     CTransactionRef tx;
@@ -456,8 +458,14 @@ std::vector<ScriptPreCheck> GatherScriptPreChecks(const Config &config, const CT
                                                   const std::vector<CTransactionRef> &txs)
     LOCKS_EXCLUDED(cs_main);
 
-/** Runs a pre-check's input scripts without locks, caching the signatures that verify (as for mempool acceptance). */
-void RunScriptPreCheck(const ScriptPreCheck &check);
+/**
+ * Runs a pre-check's input scripts without locks, caching the signatures that verify (as for mempool acceptance).
+ * Returns the transaction's sigchecks if every input passed; record them with AddPassedPreCheck.
+ */
+std::optional<int> RunScriptPreCheck(const ScriptPreCheck &check);
+
+/** Records a pre-check that passed in the script execution cache (see ScriptPreCheck). */
+void AddPassedPreCheck(const ScriptPreCheck &check, int nSigChecks) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 /** Convert CValidationState to a human-readable message for logging */
 std::string FormatStateMessage(const CValidationState &state);

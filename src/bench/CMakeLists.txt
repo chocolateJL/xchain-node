@@ -60,6 +60,7 @@ add_executable(bench_bitcoin
 	libauth_bench.cpp
 	lockedpool.cpp
 	mediantimepast.cpp
+	mempool_accept_pq.cpp
 	mempool_eviction.cpp
 	merkle_root.cpp
 	pqsig.cpp

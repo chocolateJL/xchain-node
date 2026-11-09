@@ -1034,7 +1034,7 @@ std::vector<ScriptPreCheck> GatherScriptPreChecks(const Config &config, const CT
     return checks;
 }
 
-void RunScriptPreCheck(const ScriptPreCheck &check) {
+std::optional<int> RunScriptPreCheck(const ScriptPreCheck &check) {
     CCoinsView dummy;
     CCoinsViewCache view(&dummy);
     for (size_t i = 0; i < check.coins.size(); ++i) {
@@ -1043,15 +1043,26 @@ void RunScriptPreCheck(const ScriptPreCheck &check) {
     const PQAdmissionScope pqAdmissionScope;
     PrecomputedTransactionData txdata;
     TxSigCheckLimiter txLimitSigChecks;
+    int nSigChecks = 0;
     for (const ScriptExecutionContext &context : ScriptExecutionContext::createForAllInputs(*check.tx, view)) {
         if (!txdata.populated) {
             txdata.PopulateFromContext(context);
         }
         CScriptCheck scriptCheck(context, check.flags, true, txdata, &txLimitSigChecks);
         if (!scriptCheck()) {
-            return;
+            return std::nullopt;
         }
+        nSigChecks += scriptCheck.GetScriptExecutionMetrics().GetSigChecks();
     }
+    return nSigChecks;
+}
+
+void AddPassedPreCheck(const ScriptPreCheck &check, int nSigChecks) {
+    AssertLockHeld(cs_main);
+    // Like CheckInputs' own entries: the key commits to the transaction (and so to the coins it spends) and the flags.
+    // The flags are the standard ones, which only mempool acceptance uses; block validation looks up the next block's
+    // flags, whose entry still needs a result of the portable ML-DSA build (decision D12).
+    AddKeyInScriptCache(ScriptCacheKey(*check.tx, check.flags), nSigChecks);
 }
 
 /**

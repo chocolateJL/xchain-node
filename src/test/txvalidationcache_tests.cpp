@@ -741,17 +741,32 @@ BOOST_FIXTURE_TEST_CASE(script_pre_check, TxValidationCacheSetup) {
     BOOST_REQUIRE_EQUAL(checks[0].coins.size(), 1u);
     BOOST_CHECK(checks[0].coins[0].GetTxOut() == m_coinbase_txns[0]->vout[0]);
 
-    for (const ScriptPreCheck &check : checks) {
-        RunScriptPreCheck(check);
+    // A passing pre-check reports its sigchecks and, once recorded, lets acceptance skip the standard-flags pass; a
+    // failing one is not recorded.
+    const std::optional<int> goodSigChecks = RunScriptPreCheck(checks[0]);
+    BOOST_REQUIRE(goodSigChecks);
+    BOOST_CHECK_EQUAL(*goodSigChecks, 1);
+    BOOST_CHECK(!RunScriptPreCheck(checks[1]));
+    const ScriptCacheKey goodKey(*good, checks[0].flags);
+    {
+        LOCK(cs_main);
+        AddPassedPreCheck(checks[0], *goodSigChecks);
+        int nSigChecks = 0;
+        BOOST_CHECK(IsKeyInScriptCache(goodKey, false, nSigChecks));
+        BOOST_CHECK_EQUAL(nSigChecks, 1);
     }
     BOOST_CHECK(ToMemPool(CMutableTransaction(*good)));
+    // Even a wrongly recorded entry only skips the standard-flags pass: the pass with the next block's flags still
+    // runs the scripts and rejects the bad signature.
+    WITH_LOCK(cs_main, AddPassedPreCheck(checks[1], 1));
     BOOST_CHECK(!ToMemPool(CMutableTransaction(*bad)));
+    BOOST_CHECK(!g_mempool.exists(bad->GetId()));
 
     // Now `good` is in the mempool (nothing to pre-check) and `child` can be pre-checked from the mempool's coins.
     checks = GatherScriptPreChecks(GetConfig(), g_mempool, {good, child});
     BOOST_REQUIRE_EQUAL(checks.size(), 1u);
     BOOST_CHECK(checks[0].tx == child);
-    RunScriptPreCheck(checks[0]);
+    BOOST_CHECK(RunScriptPreCheck(checks[0]));
     BOOST_CHECK(ToMemPool(CMutableTransaction(*child)));
 }
 
